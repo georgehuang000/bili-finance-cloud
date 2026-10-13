@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+sqlalchemy
+apscheduler
+openai
+python-dotenv
+httpx
+qrcode
+pypdf==6.20.0

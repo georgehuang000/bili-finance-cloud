@@ -1,0 +1,14 @@
+.env
+.env.*
+!web/.env.public
+.vercel/
+**/.venv/
+**/__pycache__/
+**/*.pyc
+**/node_modules/
+**/*.db
+**/*.bak
+web/dist/
+server/crawl_state.json
+server/tmp/
+outputs/

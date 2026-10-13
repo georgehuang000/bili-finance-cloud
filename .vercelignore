@@ -1,0 +1,16 @@
+.env
+.env.*
+**/.venv/**
+**/node_modules/**
+**/__pycache__/**
+**/*.db
+**/*.db-*
+**/*.bak
+server/crawl_state.json
+server/tmp/**
+external/**
+outputs/**
+web/dist-public/**
+tools/**
+docs/**
+.git/**

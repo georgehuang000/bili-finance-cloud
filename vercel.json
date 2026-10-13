@@ -1,0 +1,4 @@
+{
+  "buildCommand": "npm ci --prefix web && npm run build --prefix web",
+  "functions": {"app.py": {"maxDuration": 300}}
+}
