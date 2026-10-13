@@ -48,6 +48,9 @@ jobs:
       - name: Execute queued jobs
         if: env.DATABASE_URL != ''
         run: python tools/cloud_worker.py
+      - name: Check public site during manual validation
+        if: github.event_name == 'workflow_dispatch' && env.DATABASE_URL != ''
+        run: python tools/check_cloud_site.py
       - name: Execute scheduled collection
         if: env.DATABASE_URL != '' && github.event.schedule == '0 0,10 * * *'
         run: python tools/cloud_worker.py --scheduled
