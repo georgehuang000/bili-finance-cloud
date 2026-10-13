@@ -11,7 +11,7 @@ All writes for videos/dynamics use UPSERT for incremental dedup.
 """
 import json
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from typing import Iterable, Optional
 
 from sqlalchemy import (
@@ -134,12 +134,16 @@ def session_scope():
 
 
 def init_db():
-    Base.metadata.create_all(engine)
-    _migrate_columns()
-    seed_uppers()
+    with engine.begin() as connection:
+        if IS_POSTGRES:
+            connection.exec_driver_sql("SELECT pg_advisory_xact_lock(82001431)")
+        Base.metadata.create_all(connection)
+        _migrate_columns(connection)
+    if not config.CLOUD_MODE:
+        seed_uppers()
 
 
-def _migrate_columns():
+def _migrate_columns(connection=None):
     """Lightweight migration: ADD COLUMN for tables created before a column
     existed (create_all won't alter existing tables)."""
     wanted = {
@@ -152,7 +156,7 @@ def _migrate_columns():
         "uppers": [("subscribed", "INTEGER NOT NULL DEFAULT 1")],
         "dynamics": [("pics", "TEXT"), ("image_desc", "TEXT")],
     }
-    with engine.begin() as conn:
+    with (nullcontext(connection) if connection is not None else engine.begin()) as conn:
         for table, cols in wanted.items():
             existing = {col["name"] for col in inspect(conn).get_columns(table)}
             for name, ddl in cols:

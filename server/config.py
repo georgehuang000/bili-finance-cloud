@@ -31,7 +31,8 @@ DB_PATH = SERVER_DIR / "data.db"
 TMP_DIR = SERVER_DIR / "tmp"
 
 # load env from workspace root
-load_dotenv(dotenv_path=ENV_PATH)
+if not (os.getenv("CLOUD_MODE", "").lower() in ("1", "true", "yes") or os.getenv("VERCEL") == "1"):
+    load_dotenv(dotenv_path=ENV_PATH)
 
 
 def _get(key: str, default: str = "") -> str:
