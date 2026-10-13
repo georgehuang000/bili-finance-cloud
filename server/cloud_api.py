@@ -57,7 +57,7 @@ def configure(app):
         if path == "/api/health" or (path == "/api/auth/session" and not cloud.ready()):
             return await call_next(request)
         if not cloud.ready():
-            return JSONResponse({"detail": "云端数据库尚未连接，请先完成 Neon 配置"}, status_code=503)
+            return JSONResponse({"detail": "云端数据库尚未连接或初始化，请先完成数据库配置"}, status_code=503)
         if request.method not in ("GET", "HEAD", "OPTIONS") and not cloud.same_origin(request):
             return JSONResponse({"detail": "请求来源不匹配"}, status_code=403)
         owner = cloud.is_owner(request)
@@ -68,17 +68,18 @@ def configure(app):
             return JSONResponse({"detail": "只有管理员可以执行此操作"}, status_code=401)
         if author and author.group(1) not in db.subscribed_uids():
             return JSONResponse({"detail": "该UP主未订阅"}, status_code=404)
-        if path in ("/api/llm/test", "/api/llm/models", "/api/llm/settings", "/api/login/qrcode", "/api/login/qrcode/poll", "/api/login/status"):
+        if path in ("/api/login/qrcode", "/api/login/qrcode/poll", "/api/login/status"):
             cloud.refresh_settings()
-            if request.method == "POST" and path.startswith("/api/llm/"):
-                try:
-                    payload = await request.json()
-                except ValueError:
-                    return JSONResponse({"detail": "请求内容必须是JSON"}, status_code=400)
-                if not isinstance(payload, dict):
-                    return JSONResponse({"detail": "请求内容必须是对象"}, status_code=400)
-                if payload.get("provider", "deepseek") != "deepseek" or (payload.get("base_url") and payload["base_url"].rstrip("/") not in ("https://api.deepseek.com", "https://api.deepseek.com/v1")):
-                    return JSONResponse({"detail": "云端测试仅使用 DeepSeek 官方 API"}, status_code=400)
         response = await call_next(request)
         response.headers["Cache-Control"] = "private, no-store" if owner or path.startswith("/api/auth/") else "no-store"
+        return response
+
+    @app.middleware("http")
+    async def secure_responses(request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
         return response

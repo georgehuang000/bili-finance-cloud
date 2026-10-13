@@ -37,5 +37,5 @@ const COMPONENTS = { a: SafeLink, table: ScrollableTable }
  * 而不要直接使用 ReactMarkdown。
  */
 export default function SafeMarkdown({ children }) {
-  return <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={COMPONENTS}>{children}</ReactMarkdown>
+  return <ReactMarkdown skipHtml remarkPlugins={REMARK_PLUGINS} components={COMPONENTS}>{children}</ReactMarkdown>
 }

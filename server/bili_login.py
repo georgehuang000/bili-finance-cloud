@@ -20,6 +20,7 @@ import logging
 import re
 
 import httpx
+from urllib.parse import urljoin, urlsplit
 
 import config
 import env_store
@@ -52,7 +53,26 @@ _consumed: set[str] = set()
 
 
 def _new_client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(headers=_HEADERS, timeout=20.0, follow_redirects=True)
+    return httpx.AsyncClient(headers=_HEADERS, timeout=20.0, follow_redirects=False, trust_env=False)
+
+
+def validate_login_url(url):
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or parsed.username or parsed.password or parsed.hostname not in ("passport.bilibili.com", "www.bilibili.com", "api.bilibili.com") or parsed.port not in (None, 443):
+        raise ValueError("登录地址不符合安全要求")
+    return url
+
+
+async def follow_login_jump(client, url):
+    cookies = {}
+    for _ in range(3):
+        validate_login_url(url)
+        response = await client.get(url)
+        cookies.update(_extract_cookies(response))
+        if not response.is_redirect:
+            return cookies
+        url = urljoin(url, response.headers.get("location", ""))
+    raise ValueError("登录跳转次数过多")
 
 
 def _qr_data_uri(text: str) -> str:
@@ -112,7 +132,7 @@ def _apply_runtime(cookies: dict):
 
         crawler_runner._record_login_state(True, source="扫码登录成功")
     except Exception as ex:  # 状态清理失败不应影响登录本身
-        logger.warning("[bili_login] reset login_required failed: %s", ex)
+        logger.warning("[bili_login] reset login_required failed: %s", type(ex).__name__)
 
 
 async def create_qr() -> dict:
@@ -124,11 +144,12 @@ async def create_qr() -> dict:
         url = data.get("url") or ""
         key = data.get("qrcode_key") or ""
         if body.get("code") != 0 or not url or not key:
-            raise RuntimeError(f"二维码生成失败：code={body.get('code')} {body.get('message')}")
+            raise RuntimeError("二维码生成失败")
+        validate_login_url(url)
         return {"key": key, "image": _qr_data_uri(url)}
 
 
-async def poll_qr(key: str) -> dict:
+async def poll_qr(key: str, store_cookies=None) -> dict:
     """轮询扫码结果。成功后写回 .env 并热生效。
 
     返回 {status, message, account?, saved?}
@@ -141,7 +162,7 @@ async def poll_qr(key: str) -> dict:
         inner = data.get("code")
 
         if body.get("code") != 0:
-            return {"status": "error", "message": body.get("message") or "轮询失败"}
+            return {"status": "error", "message": "扫码检查失败，请稍后重试"}
 
         if inner == 86038:
             return {"status": "expired", "message": "二维码已过期，请刷新后重新扫描"}
@@ -154,29 +175,31 @@ async def poll_qr(key: str) -> dict:
         cookies = _extract_cookies(resp)
         # 部分流程需要再访问一次 data.url 才会下发完整 cookie
         jump = data.get("url") or ""
-        if jump.startswith("http"):
+        if jump:
             try:
-                extra = await client.get(jump)
-                cookies.update(_extract_cookies(extra))
+                cookies.update(await follow_login_jump(client, jump))
             except Exception as ex:
-                logger.warning("[bili_login] follow jump url failed: %s", ex)
+                logger.warning("[bili_login] follow jump url failed: %s", type(ex).__name__)
 
         if not cookies.get("SESSDATA"):
             return {"status": "error", "message": "登录已确认，但未取到登录态 Cookie，请重试"}
 
-        if key not in _consumed:
-            saved = _save_env(cookies)
+        if config.CLOUD_MODE or key not in _consumed:
+            if config.CLOUD_MODE and store_cookies is None:
+                raise ValueError("缺少已验证的扫码会话")
+            saved = store_cookies(cookies) if config.CLOUD_MODE else _save_env(cookies)
             _apply_runtime(cookies)
-            _consumed.add(key)
+            if not config.CLOUD_MODE:
+                _consumed.add(key)
             logger.info(
-                "[bili_login] 登录成功，已更新 .env 键：%s（cookie 值不打印）", saved
+                "[bili_login] 登录态已安全保存（凭据值不记录）"
             )
 
         account = await _fetch_account(client)
 
         return {
             "status": "confirmed",
-            "message": "登录成功，登录态已保存到 .env",
+            "message": "登录成功，登录态已安全保存",
             "account": account or {},
         }
 
@@ -197,9 +220,9 @@ async def _fetch_account(client: httpx.AsyncClient) -> dict:
         )
         data = (resp.json() or {}).get("data") or {}
         if data.get("isLogin"):
-            return {"uname": data.get("uname") or "", "mid": data.get("mid") or ""}
+            return {"uname": data.get("uname") or ""}
     except Exception as ex:
-        logger.warning("[bili_login] fetch account failed: %s", ex)
+        logger.warning("[bili_login] fetch account failed: %s", type(ex).__name__)
     return {}
 
 
@@ -210,7 +233,7 @@ async def check_status() -> dict:
     try:
         logged_in = await bili_api.check_login()
     except Exception as ex:
-        return {"logged_in": None, "message": f"检测失败：{ex}"}
+        return {"logged_in": None, "message": "登录状态检测失败，请稍后重试"}
     if logged_in is None:
         return {"logged_in": None, "message": "无法连接 B站，请稍后再试"}
     return {

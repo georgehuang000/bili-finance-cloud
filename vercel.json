@@ -1,4 +1,47 @@
 {
-  "buildCommand": "npm ci --prefix web && npm run build --prefix web",
-  "functions": {"app.py": {"maxDuration": 300}}
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "server": {
+      "root": "server",
+      "framework": "fastapi",
+      "entrypoint": "vercel_entry:app",
+      "installCommand": "python -m pip install -r requirements-cloud.txt",
+      "devCommand": "python dev_service.py",
+      "functions": {"vercel_entry.py": {"maxDuration": 300}}
+    },
+    "web": {
+      "root": "web",
+      "framework": "vite",
+      "buildCommand": "npm run build",
+      "outputDirectory": "dist",
+      "rewrites": [
+        {"source": "/history", "destination": "/index.html"},
+        {"source": "/research", "destination": "/index.html"},
+        {"source": "/upper/:uid", "destination": "/index.html"}
+      ]
+    }
+  },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {"key": "X-Content-Type-Options", "value": "nosniff"},
+        {"key": "X-Frame-Options", "value": "DENY"},
+        {"key": "Referrer-Policy", "value": "no-referrer"},
+        {"key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()"}
+      ]
+    },
+    {
+      "source": "/(.*)",
+      "missing": [{"type": "host", "value": "(?:localhost|127\\.0\\.0\\.1)(?::[0-9]+)?"}],
+      "headers": [
+        {"key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https: data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"},
+        {"key": "Strict-Transport-Security", "value": "max-age=31536000; includeSubDomains"}
+      ]
+    }
+  ],
+  "rewrites": [
+    {"source": "/api/(.*)", "destination": {"service": "server"}},
+    {"source": "/(.*)", "destination": {"service": "web"}}
+  ]
 }

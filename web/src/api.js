@@ -1,4 +1,4 @@
-// 统一 API 层。所有请求走相对路径 /api,dev 由 vite proxy 转发到 http://localhost:8000
+// Same-origin /api is routed to FastAPI by Vercel Services (including vercel dev).
 // 字段名严格遵循后端契约,勿改。
 import { READ_ONLY } from './access'
 import { requestPublished } from './publishedApi'
@@ -107,7 +107,7 @@ export function createQrLogin() {
 
 /** GET /api/login/qrcode/poll?key= 轮询扫码状态 */
 export function pollQrLogin(key) {
-  return request(`/api/login/qrcode/poll?key=${encodeURIComponent(key)}`)
+  return request('/api/login/qrcode/poll', { method: 'POST', body: JSON.stringify({ key }) })
 }
 
 /** GET /api/login/status 主动检测登录态是否有效 */
@@ -120,36 +120,14 @@ export function getDiagnostics() {
   return request('/api/diagnostics')
 }
 
-/** GET /api/llm/settings 当前模型配置(密钥只返回掩码,原文永不出服务端) */
-export function getLlmSettings() {
-  return request('/api/llm/settings')
-}
-
-/**
- * POST /api/llm/settings 保存模型配置(写回 .env 并立刻生效,无需重启)
- * payload: {provider?, api_key?, base_url?, model?, vision_model?, thinking?,
- *           vision_enabled?, vision_max_images?}
- * api_key 留空或传掩码 = 不修改现有密钥
- */
-export function saveLlmSettings(payload) {
-  return request('/api/llm/settings', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
-/** POST /api/llm/models 向服务商拉取可用模型名(避免手打错模型名) */
-export function listLlmModels(payload) {
-  return request('/api/llm/models', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
-/** POST /api/llm/test 测试连接;vision=true 时额外验证图片识别能力 */
-export function testLlm(payload) {
+/** Only test the server's existing model configuration; never submit a key. */
+export function testLlm() {
   return request('/api/llm/test', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: '{}',
   })
+}
+
+export function clearBiliLogin() {
+  return request('/api/login', { method: 'DELETE' })
 }

@@ -6,19 +6,20 @@ the queue lease and performs collection/AI calls. No key is returned by APIs.
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import time
 from urllib.parse import urlsplit
 
 from sqlalchemy import Column, Integer, String, Text, select, update
+from sqlalchemy import inspect
 
 import config
 import db
 
-COOKIE = "bili_owner"
+COOKIE = "__Host-bili_owner"
 SECRET_KEYS = {
-    "LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "VISION_MODEL", "LLM_THINKING",
-    "VISION_ENABLED", "VISION_MAX_IMAGES_PER_ROUND", "BILI_SESSDATA", "BILI_JCT",
+    "BILI_SESSDATA", "BILI_JCT",
     "BILI_BUVID3", "BILI_BUVID4", "BILI_DEDEUSERID",
 }
 
@@ -39,6 +40,15 @@ class OwnerSession(db.Base):
     __tablename__ = "cloud_owner_sessions"
     digest = Column(String, primary_key=True)
     expires_ts = Column(Integer, nullable=False)
+
+
+class LoginChallenge(db.Base):
+    __tablename__ = "cloud_login_challenges"
+    digest = Column(String, primary_key=True)
+    owner_digest = Column(String, nullable=False)
+    expires_ts = Column(Integer, nullable=False)
+    consumed = Column(Integer, nullable=False, default=0)
+    lease_ts = Column(Integer, nullable=False, default=0)
 
 
 class LoginWindow(db.Base):
@@ -62,7 +72,13 @@ class Job(db.Base):
 
 
 def ready():
-    return db.IS_POSTGRES
+    if not db.IS_POSTGRES:
+        return False
+    try:
+        required = {"uppers", "videos", "dynamics", "summaries", "finance_sources", "finance_claims", "finance_attempts", "finance_runs", "finance_evidence", "finance_evidence_jobs", "cloud_settings", "cloud_state", "cloud_jobs", "cloud_owner_sessions", "cloud_login_windows", "cloud_login_challenges"}
+        return required.issubset(set(inspect(db.engine).get_table_names()))
+    except Exception:
+        return False
 
 
 def password_hash(password):
@@ -119,11 +135,105 @@ def logout(request):
         row = session.get(OwnerSession, digest)
         if row:
             session.delete(row)
+        session.execute(update(LoginChallenge).where(LoginChallenge.owner_digest == digest).values(expires_ts=0))
+
+
+def _owner_digest(request):
+    return hashlib.sha256(request.cookies.get(COOKIE, "").encode()).hexdigest()
+
+
+def register_qr(key, request):
+    now = int(time.time())
+    digest = hashlib.sha256(key.encode()).hexdigest()
+    owner = _owner_digest(request)
+    with db.session_scope() as session:
+        session.query(LoginChallenge).filter(LoginChallenge.expires_ts < now).delete()
+        session.execute(update(LoginChallenge).where(LoginChallenge.owner_digest == owner, LoginChallenge.consumed == 0).values(expires_ts=0))
+        session.add(LoginChallenge(digest=digest, owner_digest=owner, expires_ts=now + 180, consumed=0, lease_ts=0))
+
+
+def begin_qr_poll(key, request):
+    now = int(time.time())
+    with db.session_scope() as session:
+        row = session.execute(select(LoginChallenge).where(LoginChallenge.digest == hashlib.sha256(key.encode()).hexdigest()).with_for_update()).scalar_one_or_none()
+        if not row or row.owner_digest != _owner_digest(request) or row.expires_ts <= now:
+            return "invalid"
+        if row.consumed:
+            return "complete"
+        if row.lease_ts > now:
+            return "busy"
+        row.lease_ts = now + 120
+        return "ready"
+
+
+def end_qr_poll(key, request):
+    with db.session_scope() as session:
+        session.execute(update(LoginChallenge).where(LoginChallenge.digest == hashlib.sha256(key.encode()).hexdigest(), LoginChallenge.owner_digest == _owner_digest(request)).values(lease_ts=0))
+
+
+def complete_qr_cookies(key, request, values):
+    if set(values) != SECRET_KEYS or any(not isinstance(value, str) or len(value) > 8192 or "\r" in value or "\n" in value for value in values.values()):
+        raise ValueError("登录凭据格式不正确")
+    cipher = _cipher()
+    with db.session_scope() as session:
+        row = session.execute(select(LoginChallenge).where(LoginChallenge.digest == hashlib.sha256(key.encode()).hexdigest()).with_for_update()).scalar_one_or_none()
+        owner = session.get(OwnerSession, _owner_digest(request))
+        if not row or not owner or owner.expires_ts <= time.time() or row.owner_digest != owner.digest or row.expires_ts <= time.time() or row.consumed:
+            raise ValueError("扫码会话已失效，请重新生成二维码")
+        for name, value in values.items():
+            encrypted = cipher.encrypt(value.encode()).decode()
+            session.execute(db.upsert_insert(Setting).values(key=name, encrypted=encrypted).on_conflict_do_update(index_elements=[Setting.key], set_={"encrypted": encrypted}))
+        row.consumed, row.lease_ts = 1, 0
+    return list(values)
+
+
+def clear_bili_credentials():
+    save_settings({key: "" for key in SECRET_KEYS})
+    with db.session_scope() as session:
+        session.execute(update(LoginChallenge).values(expires_ts=0))
+    refresh_settings()
+    state = load_state("crawl")
+    state["login_required"] = True
+    save_state("crawl", state)
 
 
 def same_origin(request):
+    # Browser fetch metadata cannot be set by cross-site forms. Keep sibling
+    # origins blocked even when a request carries forwarded headers.
+    if request.headers.get("sec-fetch-site") not in (None, "same-origin"):
+        return False
     origin = request.headers.get("origin")
-    return not origin or (urlsplit(origin).netloc == request.url.netloc and urlsplit(origin).scheme == request.url.scheme)
+    if not origin:
+        return True  # Non-browser clients still need the owner session/password.
+    scheme, host = request.url.scheme, request.url.netloc
+    # Vercel supplies the original host/protocol before forwarding to the
+    # service's private port. Never trust these headers on a generic server.
+    local_proxy = os.environ.get("BILI_LOCAL_VERCEL_PROXY") == "1" and request.url.hostname in ("localhost", "127.0.0.1") and request.client and request.client.host in ("127.0.0.1", "::1")
+    if os.environ.get("VERCEL") == "1" or local_proxy:
+        forwarded_host = request.headers.get("x-forwarded-host")
+        forwarded_proto = request.headers.get("x-forwarded-proto")
+        # CLI 63 Services uses a private Host and exposes its public localhost
+        # address in x-vercel-deployment-url instead. This exception applies
+        # only to local development and a loopback service connection.
+        if not forwarded_host and (local_proxy or os.environ.get("VERCEL_ENV") == "development") and request.url.hostname in ("localhost", "127.0.0.1"):
+            local_host = request.headers.get("x-vercel-deployment-url", "")
+            try:
+                if urlsplit(f"http://{local_host}").hostname in ("localhost", "127.0.0.1") and request.client and request.client.host in ("127.0.0.1", "::1"):
+                    forwarded_host, forwarded_proto = local_host, "http"
+            except ValueError:
+                return False
+        if forwarded_host and forwarded_proto:
+            if forwarded_proto not in ("http", "https") or any(c in forwarded_host for c in ",/@\\ \r\n"):
+                return False
+            host, scheme = forwarded_host, forwarded_proto
+    try:
+        supplied, target = urlsplit(origin), urlsplit(f"{scheme}://{host}")
+        if supplied.scheme not in ("http", "https") or supplied.username or supplied.password or supplied.path or supplied.query or supplied.fragment:
+            return False
+        port = lambda url: url.port or (443 if url.scheme == "https" else 80)
+        return (supplied.scheme, supplied.hostname, port(supplied)) == (target.scheme, target.hostname, port(target))
+    except ValueError:
+        return False
 
 
 def _cipher():
@@ -135,7 +245,7 @@ def _cipher():
 
 def read_settings():
     with db.session_scope() as session:
-        rows = session.execute(select(Setting)).scalars().all()
+        rows = session.execute(select(Setting).where(Setting.key.in_(SECRET_KEYS))).scalars().all()
         if not rows:
             return {}
         cipher = _cipher()
@@ -145,9 +255,8 @@ def read_settings():
 def save_settings(updates):
     if set(updates) - SECRET_KEYS:
         raise ValueError("不支持的云端配置项")
-    merged = {**read_settings(), **updates}
-    if urlsplit(merged.get("LLM_BASE_URL", config.LLM_BASE_URL)).hostname != "api.deepseek.com":
-        raise ValueError("云端测试仅使用 DeepSeek 官方 API")
+    if any(not isinstance(value, str) or len(value) > 8192 or "\r" in value or "\n" in value for value in updates.values()):
+        raise ValueError("登录凭据格式不正确")
     cipher = _cipher()
     with db.session_scope() as session:
         for key, value in updates.items():
@@ -157,21 +266,16 @@ def save_settings(updates):
 
 
 def refresh_settings():
-    import llm_client
     import bili_api
     values = read_settings()
     changed = False
     for key, value in values.items():
-        if key == "VISION_ENABLED":
-            value = value.lower() in ("1", "true", "yes")
-        elif key == "VISION_MAX_IMAGES_PER_ROUND":
-            value = int(value)
         if getattr(config, key, None) != value:
             setattr(config, key, value)
             changed = True
     if changed:
-        llm_client.invalidate()
         bili_api.invalidate_cookies()
+        bili_api.invalidate_login_cache()
 
 
 def save_state(key, data):

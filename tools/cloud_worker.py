@@ -57,9 +57,6 @@ def main():
     if not cloud.ready():
         print("DATABASE_URL 尚未配置；未运行任何收费任务")
         return
-    db.init_db()
-    analysis.init_store()
-    evidence.init_store()
     state = cloud.load_state("crawl")
     for key in ("uppers", "enrich", "vision", "login_required", "last_summary_error"):
         if key in state:

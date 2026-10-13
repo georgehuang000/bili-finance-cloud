@@ -27,6 +27,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.engine import make_url
 
 import config
 
@@ -38,9 +39,21 @@ if database_url.startswith(("postgres://", "postgresql://")):
 IS_POSTGRES = database_url.startswith("postgresql+psycopg://")
 if database_url and not IS_POSTGRES:
     raise ValueError("DATABASE_URL 必须是 PostgreSQL 连接串")
+
+
+def connection_options(url):
+    if not url:
+        return {"check_same_thread": False}
+    options = {"connect_timeout": 10}
+    if make_url(url).host not in ("127.0.0.1", "localhost", "::1"):
+        import certifi
+        options.update(sslmode="verify-full", sslrootcert=certifi.where())
+    return options
+
+
 engine = create_engine(
     database_url or ("sqlite://" if config.CLOUD_MODE else f"sqlite:///{config.DB_PATH}"),
-    connect_args={"connect_timeout": 10} if IS_POSTGRES else {"check_same_thread": False},
+    connect_args=connection_options(database_url),
     **({"pool_size": 1, "max_overflow": 2, "pool_pre_ping": True} if IS_POSTGRES else {}),
     future=True,
 )

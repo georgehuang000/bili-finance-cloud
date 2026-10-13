@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
-import { getStatus, postCrawl, postSummarize } from '../api'
+import { getStatus, postCrawl, postSummarize, testLlm } from '../api'
 import LoginDialog from './LoginDialog'
-import ModelSettingsDialog from './ModelSettingsDialog'
 import { useToast } from './Toast'
 import { useAccess } from '../access'
 import { fmtFullTime } from '../utils'
@@ -70,17 +69,21 @@ export default function TopBar() {
   const [crawlPending, setCrawlPending] = useState(false)
   const [sumPending, setSumPending] = useState(false)
   const [loginOpen, setLoginOpen] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [modelPending, setModelPending] = useState(false)
   const timerRef = useRef(null)
 
-  const poll = async () => {
+  const poll = useCallback(async () => {
     try {
       const s = await getStatus()
       setStatus(s)
     } catch {
       setStatus(null)
     }
-  }
+  }, [])
+  const onBiliLoggedIn = useCallback(() => {
+    toast('B站登录成功，登录态已生效')
+    poll()
+  }, [toast, poll])
 
   useEffect(() => {
     poll()
@@ -140,7 +143,7 @@ export default function TopBar() {
         </nav>
         <div className="topbar-right">
           {cloud && <button className="btn" onClick={async () => {
-            if (canManage) { await logout(); setLoginOpen(false); setSettingsOpen(false) }
+            if (canManage) { await logout(); setLoginOpen(false) }
             else { setOwnerOpen(true); setOwnerError('') }
           }}>{canManage ? '退出管理' : '管理登录'}</button>}
           {cloud && testMode && canManage && <span className="status-chip">手动测试</span>}
@@ -169,32 +172,34 @@ export default function TopBar() {
           )}
           {!readOnly && <>
           {status && status.llm_configured === false ? (
-            <button
-              className="status-chip error as-button"
-              onClick={() => setSettingsOpen(true)}
-              title="还没有配置解读模型，总结功能不可用；点这里填写 API Key"
-            >
+            <span className="status-chip error" title="分析服务未配置，请由管理员在部署平台配置">
               <span className="dot red" />
-              <span className="chip-text">模型未配置</span>
-            </button>
+              <span className="chip-text">分析服务未配置</span>
+            </span>
           ) : null}
           <button
             className={`btn ${status?.login_required ? 'primary' : ''}`}
             onClick={() => setLoginOpen(true)}
             aria-label="扫码登录"
-            title="用 B站 App 扫码登录，登录态自动写入 .env"
+            title="用 B站 App 扫码登录"
           >
             <LoginIcon />
             <span className="btn-text">扫码登录</span>
           </button>
           <button
             className={`btn ${status && status.llm_configured === false ? 'primary' : ''}`}
-            onClick={() => setSettingsOpen(true)}
-            title="设置解读用的模型与 API Key（保存后立即生效）"
-            aria-label="模型设置"
+            onClick={async () => {
+              setModelPending(true)
+              try { const result = await testLlm(); toast(result.ok ? `模型连接正常 · ${result.latency_ms}ms${result.usage?.total_tokens != null ? ` · ${result.usage.total_tokens} tokens` : ''}` : result.error || '连接失败', result.ok ? undefined : 'error') }
+              catch (error) { toast(error.message, 'error') }
+              finally { setModelPending(false) }
+            }}
+            disabled={modelPending}
+            title="用一次小请求检查已配置的分析服务"
+            aria-label="测试模型连接"
           >
             <GearIcon />
-            <span className="btn-text">模型设置</span>
+            <span className="btn-text">{modelPending ? '测试中…' : '测试模型连接'}</span>
           </button>
           {!(cloud && testMode) && <><button className="btn" aria-label="立即爬取" onClick={handleCrawl} disabled={crawlPending || crawling}>
             {crawling ? <span className="spinner" /> : <RefreshIcon />}
@@ -221,15 +226,7 @@ export default function TopBar() {
       {!readOnly && <LoginDialog
         open={loginOpen}
         onClose={() => setLoginOpen(false)}
-        onLoggedIn={() => {
-          toast('B站登录成功，登录态已生效')
-          poll()
-        }}
-      />}
-      {!readOnly && <ModelSettingsDialog
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        onSaved={() => poll()} // 保存后立刻刷新状态，清掉「模型未配置」提示
+        onLoggedIn={onBiliLoggedIn}
       />}
     </header>
   )

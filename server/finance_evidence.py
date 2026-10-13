@@ -1,5 +1,6 @@
 """Bounded retrieval of public disclosure links and source-grounded checking."""
 import hashlib
+import os
 import ipaddress
 import json
 import socket
@@ -90,7 +91,8 @@ def fetch_document(url):
                         raise ValueError("文件超过4MB，请选用较短的公告或财报摘要")
                 mime = response.headers.get("content-type", "").lower()
                 if bytes(content).startswith(b"%PDF"):
-                    process = subprocess.run([sys.executable, str(Path(__file__).with_name("finance_pdf_worker.py"))], input=bytes(content), capture_output=True, timeout=25)
+                    parser_env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR", "LANG") if key in os.environ}
+                    process = subprocess.run([sys.executable, str(Path(__file__).with_name("finance_pdf_worker.py"))], input=bytes(content), capture_output=True, timeout=25, env=parser_env)
                     if process.returncode:
                         raise ValueError("PDF提取失败或超出解析资源限制")
                     result = json.loads(process.stdout)

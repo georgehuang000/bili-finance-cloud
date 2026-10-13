@@ -37,6 +37,13 @@ _client: Optional[httpx.AsyncClient] = None
 _cookies: Dict[str, str] = {}
 
 
+def scoped_cookies(values):
+    jar = httpx.Cookies()
+    for name, value in values.items():
+        jar.set(name, value, domain=".bilibili.com", path="/")
+    return jar
+
+
 async def _get_client() -> httpx.AsyncClient:
     """获取或创建 httpx client。"""
     global _client
@@ -44,7 +51,7 @@ async def _get_client() -> httpx.AsyncClient:
         _client = httpx.AsyncClient(
             headers=_HEADERS,
             timeout=30.0,
-            follow_redirects=True,
+            follow_redirects=False,
         )
     return _client
 
@@ -141,6 +148,10 @@ async def _api_get(url: str, params: dict, *, need_wbi: bool = False,
     退避用尽才抛错，并置一段整轮冷却，避免继续硬打接口加重风控。
     """
     global _cookies
+    from urllib.parse import urlsplit
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or parsed.hostname != "api.bilibili.com" or parsed.username or parsed.password or parsed.port not in (None, 443):
+        raise ValueError("仅允许官方B站API地址")
     if client is None:
         client = await _get_client()
     if _cookies:
@@ -174,7 +185,7 @@ async def _api_get(url: str, params: dict, *, need_wbi: bool = False,
         await _respect_cooldown()
 
         try:
-            resp = await client.get(url, params=params, cookies=cookies)
+            resp = await client.get(url, params=params, cookies=scoped_cookies(cookies), follow_redirects=False)
         except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as e:
             net_attempt += 1
             if net_attempt < 3:
@@ -256,7 +267,7 @@ async def check_login() -> Optional[bool]:
     复用，甚至把爬虫正在用的 client 关掉。
     """
     global _cookies
-    client = httpx.AsyncClient(headers=_HEADERS, timeout=30.0, follow_redirects=True)
+    client = httpx.AsyncClient(headers=_HEADERS, timeout=30.0, follow_redirects=False)
     try:
         if _cookies:
             cookies = _cookies
@@ -271,7 +282,7 @@ async def check_login() -> Optional[bool]:
             )
             _cookies = cookies
 
-        resp = await client.get(NAV_URL, cookies=cookies)
+        resp = await client.get(NAV_URL, cookies=scoped_cookies(cookies))
         body = resp.json()
         code = body.get("code", -1)
         if code == 0:

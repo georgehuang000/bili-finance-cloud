@@ -279,17 +279,31 @@ def list_claims(uid=None, topic=None, limit=150):
         args.append(topic)
     with connect() as c:
         rows = c.execute("SELECT f.*,u.name author,s.title,s.url,s.kind source_kind,s.model,s.truncated,s.created_ts FROM finance_claims f JOIN finance_sources s ON s.id=f.source JOIN uppers u ON u.uid=f.uid WHERE " + " AND ".join(where) + " ORDER BY f.pub_ts DESC,f.id DESC LIMIT ?", args + [limit]).fetchall()
+        payloads = {row["id"]: json.loads(row["data"]) for row in rows}
+        previous_ids = sorted({payload["change"]["previous_id"] for payload in payloads.values() if payload.get("change")})
+        previous_rows = {}
+        if previous_ids:
+            placeholders = ",".join("?" for _ in previous_ids)
+            previous_rows = {(row["id"], row["uid"]): row for row in c.execute("SELECT f.id,f.uid,f.pub_ts,f.data,s.url FROM finance_claims f JOIN finance_sources s ON s.id=f.source WHERE f.id IN (" + placeholders + ")", previous_ids)}
+        evidence_rows = {}
+        if rows:
+            claim_ids = [row["id"] for row in rows]
+            placeholders = ",".join("?" for _ in claim_ids)
+            for evidence in c.execute("SELECT claim_id,id,url,created_ts,source_label,data FROM finance_evidence WHERE claim_id IN (" + placeholders + ") ORDER BY id DESC", claim_ids):
+                item = dict(evidence)
+                claim_id = item.pop("claim_id")
+                evidence_rows.setdefault(claim_id, []).append({**item, **json.loads(item["data"])})
         output = []
         for row in rows:
-            data = {**dict(row), **json.loads(row["data"])}
+            data = {**dict(row), **payloads[row["id"]]}
             data.pop("data")
             change = data.get("change")
             if change:
-                previous = c.execute("SELECT f.id,f.pub_ts,f.data,s.url FROM finance_claims f JOIN finance_sources s ON s.id=f.source WHERE f.id=? AND f.uid=?", (change["previous_id"], row["uid"])).fetchone()
+                previous = previous_rows.get((change["previous_id"], row["uid"]))
                 if previous:
                     data["previous"] = {"id": previous["id"], "pub_ts": previous["pub_ts"], "url": previous["url"], **json.loads(previous["data"])}
                     _calibrate_change(data, data["previous"])
-            data["evidence"] = [{**dict(e), **json.loads(e["data"])} for e in c.execute("SELECT id,url,created_ts,source_label,data FROM finance_evidence WHERE claim_id=? ORDER BY id DESC", (row["id"],))]
+            data["evidence"] = evidence_rows.get(row["id"], [])
             output.append(data)
     return output
 

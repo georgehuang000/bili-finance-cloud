@@ -116,7 +116,7 @@ def describe_error(exc: Exception) -> tuple:
     conn = _exc_classes("APIConnectionError")
 
     if (auth and isinstance(exc, auth)) or status == 401:
-        return "API Key 无效、已被撤销，或不属于该服务商 —— 请重新粘贴", status
+        return ("分析服务凭据无效，请检查部署环境配置" if config.CLOUD_MODE else "API Key 无效、已被撤销，或不属于该服务商 —— 请重新粘贴"), status
     if status == 402:
         return "账户余额不足，请到服务商平台充值", status
     if (perm and isinstance(exc, perm)) or status == 403:

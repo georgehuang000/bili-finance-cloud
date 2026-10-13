@@ -64,6 +64,7 @@ cd server
 
 ```powershell
 cd web
+$env:LOCAL_API_URL = 'http://127.0.0.1:9000'
 npm run dev
 ```
 
@@ -121,17 +122,15 @@ sqlite3 server/data.db 'select count(*) from videos;'   # 数据量
 - 应用日志级别由 `.env` 的 `LOG_LEVEL`（默认 `INFO`）控制；此前未配置 logging 导致 `logger.info`
   全部丢失（journalctl 里只有 warning），现已修复。
 - 必须单进程运行（service 文件默认如此）：爬取互斥锁、APScheduler 都在进程内存里，多 worker 会重复爬取。
-- 日报生成于每轮爬取之后；换 LLM key 推荐用网页顶栏的「模型设置」（写回 `.env` 并热生效，
-  无需重启），手动改 `.env` 后则需要 `systemctl restart`。
+- 日报生成于每轮爬取之后；模型凭据只在服务器 `.env` 配置，修改后需重启。网站没有修改模型 Key 的入口；云端凭据配置见文末。
 
 ## .env 配置项（工作区根目录 `.env`）
 
-> LLM 相关配置推荐在网页顶栏点「模型设置」修改：选服务商预设、粘贴 Key、点「测试连接」，
-> 保存后自动写回本文件并**即时生效**（无需重启）。下表供手动配置或排错时参考。
+> 模型 Key 只通过部署环境配置。网站仅提供管理员“测试模型连接”，不能填写或修改 Key。以下 `.env` 配置用于本地/树莓派；云端使用平台 Secret 变量。
 
 | 配置项 | 说明 |
 | --- | --- |
-| `LLM_API_KEY` | DeepSeek 官方 API Key（**保密，勿提交/打印**）；网页端保存时写这个键 |
+| `LLM_API_KEY` | 本地 DeepSeek 官方 API Key（**保密，勿提交/打印**）；云端推荐使用 `DEEPSEEK_API_KEY` |
 | `deepseek_key` | 等价的手动键名（优先级低于 `LLM_API_KEY`），不习惯用上面那个就写这个 |
 | `LLM_BASE_URL` | LLM 接口地址，默认 `https://api.deepseek.com/v1` |
 | `LLM_MODEL` | 主模型，默认 `deepseek-flash`（= DeepSeek-V4.1-Flash，支持图片识别）；**不做兜底模型** |
@@ -178,7 +177,7 @@ sqlite3 server/data.db 'select count(*) from videos;'   # 数据量
 - 视频封面与动态配图会被送去多模态模型读一遍，抽出的文字（板块名、研报标题、数据）
   展示在卡片上，并作为素材喂给日报。整轮爬取末尾跑一次，每轮最多 `VISION_MAX_IMAGES_PER_ROUND` 张。
 - 需要服务商支持读图：DeepSeek 官方只有 `deepseek-flash` 支持（`deepseek-v4-pro` 不支持）。
-  检测到不支持时会整段跳过，不会白跑失败请求；网页「模型设置」里也有「测试图片识别」可自测。
+  检测到不支持时会整段跳过，不会白跑失败请求；云端初始测试阶段关闭图片识别，需在部署环境配置。
 - **实测结论**：动态配图能拿到，但来源是"绘图类"动态（`DRAW`）里的 `draw.items[].src`，
   而不是图文动态的 `opus.pics`（后者实测常为空，一度让人误以为动态没有配图）。
   2026-09-19 一轮实测：20 张图 = 12 张视频封面 + 7 张动态配图，零失败。
@@ -223,11 +222,9 @@ sqlite3 server/data.db 'select count(*) from videos;'   # 数据量
 3. 登录成功后，`SESSDATA / bili_jct / DedeUserID / buvid3 / buvid4` 会自动写入工作区根目录 `.env`，
    并**即时热生效**（无需重启后端），弹窗提示「登录成功」。
 
-相关接口：`POST /api/login/qrcode`（生成二维码）、`GET /api/login/qrcode/poll?key=`（轮询）、`GET /api/login/status`（检测登录态）。
+相关接口：`POST /api/login/qrcode`（生成二维码）、`POST /api/login/qrcode/poll`（正文传 key，轮询）、`GET /api/login/status`（检测登录态）。云端要求管理会话，并将 Cookie 加密入库，不写本地 `.env`。
 
-> ⚠️ 安全提示：本项目本身没有鉴权体系（任何能访问 9000 端口的人都能触发爬取、增删订阅）。
-> 扫码登录接口同样未鉴权——能访问该端口的人可以用**自己的** B站账号登录进来，从而接管爬取身份。
-> 若部署在公网，请用云安全组/防火墙限制来源 IP，或置于带鉴权的反向代理之后。
+> 本地/树莓派旧部署模式不启用云端鉴权，只限本机或已有私人网络。公网应使用下方云端模式：默认公开只读，管理、采集和扫码由管理会话保护。
 
 ### 方式 B：手动复制 Cookie
 
@@ -269,4 +266,10 @@ sqlite3 server/data.db 'select count(*) from videos;'   # 数据量
 # 云端测试版本
 
 公网权限、Vercel/PostgreSQL/GitHub Actions 接入流程与测试记录见 [docs/云端部署与测试记录.md](docs/云端部署与测试记录.md)。云端使用 DeepSeek 官方 API，初始只允许手动少量测试，自动采集保持关闭。原树莓派服务保留至全云链路验收完成。
+
+Vercel Services 方案使用 `server`（`/api/*`）和 `web`（其余页面）。联合本地开发运行 `vercel dev -L`；单独开发 Vite 时设置 `LOCAL_API_URL=http://127.0.0.1:9000` 后运行 `npm run dev --prefix web`。此变量仅用于本地代理，生产浏览器始终请求同域 `/api`，不把内部 binding URL 注入客户端。
+
+DeepSeek Key 只在 Vercel Production Secret / GitHub Actions Secret 中配置 `DEEPSEEK_API_KEY`，不能通过网站修改。B站 Cookie 由管理员扫码后加密保存，只向 B站域名发送；公开API不会返回凭据、诊断或后台任务细节。Preview 使用独立测试数据与凭据。
+
+先用迁移账号初始化/导入专用数据库，再运行 `tools/provision_cloud_roles.py` 生成受限API/worker角色。Vercel 与 GitHub Actions 分别使用对应连接串，不让应用使用数据库 owner 权限。详细步骤、验证范围和未完成项见部署记录。
 

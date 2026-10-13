@@ -11,6 +11,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from pydantic import BaseModel, Field
 
 import config
@@ -20,7 +22,6 @@ import bili_login
 import crawler_runner
 import diagnostics
 import llm_client
-import llm_settings
 import summarizer
 import scheduler
 import finance_analysis
@@ -41,7 +42,7 @@ def _setup_logging():
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
     # httpx/httpcore 每个请求都打 INFO，太吵
-    for noisy in ("httpx", "httpcore"):
+    for noisy in ("httpx", "httpcore", "openai", "sqlalchemy.engine"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
@@ -54,12 +55,12 @@ _UID_RE = re.compile(r"^\d{3,}$")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not config.CLOUD_MODE or cloud.ready():
+    if not config.CLOUD_MODE:
         db.init_db()
         finance_analysis.init_store()
         finance_evidence.init_store()
-        if config.CLOUD_MODE and config.CREDENTIAL_ENCRYPTION_KEY:
-            cloud.refresh_settings()
+    elif cloud.ready() and config.CREDENTIAL_ENCRYPTION_KEY:
+        cloud.refresh_settings()
     scheduler.start()
     yield
     scheduler.shutdown()
@@ -69,6 +70,14 @@ app = FastAPI(title="B站UP主投资内容监控", lifespan=lifespan,
               docs_url=None if config.CLOUD_MODE else "/docs",
               redoc_url=None if config.CLOUD_MODE else "/redoc")
 cloud_api.configure(app)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, error: RequestValidationError):
+    if config.CLOUD_MODE:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"detail": "请求参数格式不正确"}, status_code=422)
+    return await request_validation_exception_handler(request, error)
 
 app.add_middleware(
     CORSMiddleware,
@@ -207,9 +216,9 @@ def get_research(request: Request, uid: str | None = Query(None, pattern=r"^\d{3
         queued = [job for job in cloud.jobs() if job["kind"] == "analyze" and job["status"] in ("queued", "running")]
         state.update(running=bool(queued), automatic=not config.CLOUD_TEST_MODE and config.FINANCE_AUTO_ANALYSIS)
         if not request.state.owner:
-            state.pop("errors", None)
+            state = {key: state[key] for key in ("running", "automatic")}
     return {"claims": finance_analysis.list_claims(uid, topic),
-            "status": state, "evidence_jobs": finance_evidence.jobs(uid),
+            "status": state, "evidence_jobs": finance_evidence.jobs(uid) if not config.CLOUD_MODE or request.state.owner else [],
             "cloud_jobs": cloud.jobs() if config.CLOUD_MODE and request.state.owner else []}
 
 
@@ -273,12 +282,16 @@ def get_status(request: Request):
         if not request.state.owner:
             for author in authors:
                 author.pop("last_error", None)
-        return {"uppers": authors,
+        result = {"uppers": authors,
                 "crawling": any(j["kind"] in ("crawl", "scheduled") for j in active),
                 "summarizing": any(j["kind"] == "summarize" for j in active),
                 "login_required": state.get("login_required", False),
                 "llm_configured": llm_client.is_configured(), "llm_model": config.LLM_MODEL,
                 "cloud": True, "test_mode": config.CLOUD_TEST_MODE}
+        if not request.state.owner:
+            for key in ("login_required", "llm_configured", "llm_model", "test_mode"):
+                result.pop(key, None)
+        return result
     # 登录态缓存过期时后台复查一次（非阻塞），让登录失效在网页上及时可见，
     # 不必等到下一轮爬取才发现
     crawler_runner.maybe_refresh_login_state()
@@ -327,21 +340,50 @@ def post_summarize():
 # --- 扫码登录：生成二维码 / 轮询结果 / 检测登录态 ---
 
 @app.post("/api/login/qrcode")
-async def login_qrcode():
+async def login_qrcode(request: Request):
     """生成 B站登录二维码（前端展示，用 B站 App 扫码）。"""
     try:
-        return await bili_login.create_qr()
+        result = await bili_login.create_qr()
+        if config.CLOUD_MODE:
+            cloud.register_qr(result["key"], request)
+        return result
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"二维码生成失败：{e}")
+        raise HTTPException(status_code=502, detail="二维码生成失败，请稍后重试") from None
 
 
-@app.get("/api/login/qrcode/poll")
-async def login_qrcode_poll(key: str = Query(..., min_length=8, max_length=128)):
+class QrPollReq(BaseModel):
+    model_config = {"extra": "forbid"}
+    key: str = Field(pattern=r"^[A-Za-z0-9_-]{8,128}$")
+
+
+@app.post("/api/login/qrcode/poll")
+async def login_qrcode_poll(req: QrPollReq, request: Request):
     """轮询扫码状态；确认后登录态写入 .env 并即时生效（无需重启）。"""
+    key = req.key
+    if config.CLOUD_MODE:
+        decision = cloud.begin_qr_poll(key, request)
+        if decision == "invalid":
+            raise HTTPException(403, "二维码已过期或不属于当前管理会话")
+        if decision == "busy":
+            raise HTTPException(409, "正在检查扫码结果，请稍后重试")
+        if decision == "complete":
+            return {"status": "confirmed", "message": "登录态已安全保存"}
     try:
-        return await bili_login.poll_qr(key)
+        store = (lambda cookies: cloud.complete_qr_cookies(key, request, {env: cookies.get(name, "") for name, env in bili_login._COOKIE_TO_ENV.items()})) if config.CLOUD_MODE else None
+        return await bili_login.poll_qr(key, store_cookies=store)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"轮询失败：{e}")
+        raise HTTPException(status_code=502, detail="扫码检查失败，请重新生成二维码") from None
+    finally:
+        if config.CLOUD_MODE:
+            cloud.end_qr_poll(key, request)
+
+
+@app.delete("/api/login")
+def clear_login():
+    if not config.CLOUD_MODE:
+        raise HTTPException(404, "此操作仅适用于云端登录态")
+    cloud.clear_bili_credentials()
+    return {"ok": True, "message": "已清除本网站保存的B站登录态；需要重新扫码后才能采集"}
 
 
 @app.get("/api/login/status")
@@ -350,73 +392,23 @@ async def login_status():
     return await bili_login.check_status()
 
 
-# --- 模型设置：读取（掩码）/ 保存并热生效 / 拉模型列表 / 测试连接 ---
-
-class LlmSettingsReq(BaseModel):
-    provider: str | None = None
-    api_key: str | None = None
-    base_url: str | None = None
-    model: str | None = None
-    fallback: str | None = None
-    vision_model: str | None = None
-    thinking: str | None = None
-
-
+# Model credentials are deployment configuration, never webpage input.
 class LlmTestReq(BaseModel):
-    api_key: str | None = None
-    base_url: str | None = None
-    model: str | None = None
-    vision: bool = False
-    thinking: str | None = None
+    model_config = {"extra": "forbid"}
 
 
-def _resolve_llm_creds(req: LlmTestReq) -> tuple:
-    """表单里没填/填的是掩码时，回落到服务端已保存的值。"""
-    key = (req.api_key or "").strip()
-    if not key or llm_settings.is_masked(key):
-        key = config.LLM_API_KEY or ""
-    base = (req.base_url or "").strip() or config.LLM_BASE_URL
-    return key, base
-
-
-@app.get("/api/llm/settings")
-def llm_settings_get():
-    """当前模型配置。**密钥只返回掩码**，原文永不出服务端。"""
-    return llm_settings.current()
-
-
-@app.post("/api/llm/settings")
-def llm_settings_post(req: LlmSettingsReq):
-    """保存模型配置：写回 .env 并立刻生效（无需重启）。"""
-    try:
-        return llm_settings.save(req.model_dump(exclude_none=True))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logging.exception("保存模型设置失败")
-        raise HTTPException(status_code=500, detail=f"保存失败：{e}")
-
-
-@app.post("/api/llm/models")
-def llm_models(req: LlmTestReq):
-    """向服务商拉取可用模型名，供前端下拉选择（避免手打错模型名）。"""
-    key, base = _resolve_llm_creds(req)
-    return llm_client.list_models(key, base)
+@app.get("/api/llm/status")
+def llm_status():
+    return {"configured": llm_client.is_configured(), "model": config.LLM_MODEL}
 
 
 @app.post("/api/llm/test")
 def llm_test(req: LlmTestReq):
-    """用一次极小调用验证 key / base_url / 模型名是否真的可用。
-
-    vision=True 时额外发一张纯色小图，验证图片识别能力（DeepSeek 只有
-    deepseek-flash 支持；v4-pro 会明确报错）。
-    """
-    key, base = _resolve_llm_creds(req)
-    model = (req.model or "").strip() or (
-        config.VISION_MODEL if req.vision else config.LLM_MODEL
-    )
+    """Test the server's existing configuration; accept no credential overrides."""
+    if not llm_client.is_configured():
+        raise HTTPException(400, "分析服务未配置，请由管理员在部署平台配置")
     return llm_client.test_connection(
-        key, base, model, vision=req.vision, thinking=req.thinking
+        config.LLM_API_KEY, config.LLM_BASE_URL, config.LLM_MODEL, thinking="disabled"
     )
 
 
@@ -431,6 +423,8 @@ WEB_DIST = config.WORKSPACE_ROOT / "web" / "dist"
 def spa_fallback(full_path: str):
     if full_path == "api" or full_path.startswith("api/"):
         raise HTTPException(404, "接口不存在")
+    if config.CLOUD_API_ONLY:
+        raise HTTPException(404, "页面由前端服务提供")
     if full_path:
         candidate = (WEB_DIST / full_path).resolve()
         try:

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { createQrLogin, pollQrLogin } from '../api'
+import { createQrLogin, pollQrLogin, clearBiliLogin } from '../api'
+import { useAccess } from '../access'
 
 const POLL_MS = 2000
 
@@ -9,6 +10,7 @@ const POLL_MS = 2000
  * 成功后端会把登录态写入 .env 并即时生效（无需重启），这里只负责反馈。
  */
 export default function LoginDialog({ open, onClose, onLoggedIn }) {
+  const { cloud } = useAccess()
   const [qr, setQr] = useState(null) // {key, image}
   const [phase, setPhase] = useState('loading') // loading|waiting|scanned|confirmed|expired|error
   const [message, setMessage] = useState('正在获取二维码…')
@@ -134,7 +136,7 @@ export default function LoginDialog({ open, onClose, onLoggedIn }) {
               <div className="login-done-title">登录成功</div>
               <div className="login-done-sub">
                 {account?.uname ? `已登录为 ${account.uname}，` : ''}
-                登录态已写入 .env，爬虫下一轮即生效（无需重启）
+                登录态已安全保存，采集任务可使用新的登录态
               </div>
               <button className="btn primary" onClick={onClose}>
                 完成
@@ -167,6 +169,12 @@ export default function LoginDialog({ open, onClose, onLoggedIn }) {
                 <li>扫描上方二维码，并在手机上确认登录</li>
                 <li>成功后本页自动跳转，登录态自动保存</li>
               </ol>
+              {cloud && <button className="btn" onClick={async () => {
+                if (!window.confirm('清除本网站保存的B站登录态？后续需要重新扫码才能采集。')) return
+                stopPolling()
+                try { const result = await clearBiliLogin(); setQr(null); setPhase('expired'); setMessage(result.message) }
+                catch (error) { setPhase('error'); setMessage(error.message) }
+              }}>清除本网站B站登录态</button>}
             </>
           )}
         </div>

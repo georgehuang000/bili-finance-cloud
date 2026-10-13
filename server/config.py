@@ -48,8 +48,9 @@ def _get_int(key: str, default: int) -> int:
 
 
 # Cloud API functions never run a scheduler or keep durable files locally.
-CLOUD_MODE = _get("CLOUD_MODE", _get("VERCEL", "false")).lower() in ("1", "true", "yes")
+CLOUD_MODE = _get("VERCEL") == "1" or _get("CLOUD_MODE", "false").lower() in ("1", "true", "yes")
 CLOUD_WORKER = _get("CLOUD_WORKER", "false").lower() in ("1", "true", "yes")
+CLOUD_API_ONLY = _get("CLOUD_API_ONLY", "false").lower() in ("1", "true", "yes")
 CLOUD_TEST_MODE = _get("CLOUD_TEST_MODE", "true").lower() in ("1", "true", "yes")
 DATABASE_URL = _get("DATABASE_URL")
 ADMIN_PASSWORD_HASH = _get("ADMIN_PASSWORD_HASH")
@@ -64,11 +65,13 @@ if CLOUD_MODE:
 #                 > deepseek_key（手动写在 .env 里的键名）
 # 两者都支持，先命中的生效。
 # The secret is read here but MUST NOT be printed/logged anywhere.
-LLM_API_KEY = _get("LLM_API_KEY") or _get("deepseek_key")
+LLM_API_KEY = (_get("DEEPSEEK_API_KEY") or _get("LLM_API_KEY")) if CLOUD_MODE else (_get("LLM_API_KEY") or _get("deepseek_key"))
 # 兼容别名：老代码/诊断里用的是这个名字
 SENSETIME_KEY = LLM_API_KEY
 
 LLM_BASE_URL = _get("LLM_BASE_URL", "https://api.deepseek.com/v1")
+if CLOUD_MODE:
+    LLM_BASE_URL = "https://api.deepseek.com/v1"
 # deepseek-flash = DeepSeek-V4.1-Flash：1M 上下文、384K 输出、支持图片识别、最便宜。
 # 注意 `deepseek-v4-flash` 是已退役的旧名（仍被接受，但由 V4.1-Flash 承接）。
 LLM_MODEL = _get("LLM_MODEL", "deepseek-flash")
