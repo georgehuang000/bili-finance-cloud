@@ -10,8 +10,12 @@ Tables:
 All writes for videos/dynamics use UPSERT for incremental dedup.
 """
 import json
+import os
+import tempfile
+import threading
 import time
 from contextlib import contextmanager, nullcontext
+from pathlib import Path
 from typing import Iterable, Optional
 
 from sqlalchemy import (
@@ -40,14 +44,34 @@ IS_POSTGRES = database_url.startswith("postgresql+psycopg://")
 if database_url and not IS_POSTGRES:
     raise ValueError("DATABASE_URL 必须是 PostgreSQL 连接串")
 
+_certificate_lock = threading.Lock()
+_certificate_folder = None
+
+
+def root_certificate_file():
+    """Keep TLS verification when Windows libpq cannot open a Unicode path."""
+    import certifi
+    source = Path(certifi.where())
+    if os.name != "nt" or str(source).isascii():
+        return str(source)
+    global _certificate_folder
+    with _certificate_lock:
+        if _certificate_folder is None:
+            folder = tempfile.TemporaryDirectory(prefix="bili-cloud-ca-")
+            target_root = Path(folder.name).resolve()
+            if not target_root.is_relative_to(Path(tempfile.gettempdir()).resolve()) or not str(target_root).isascii():
+                raise ValueError("TLS证书临时目录必须为兼容的英文路径")
+            (target_root / "cacert.pem").write_bytes(source.read_bytes())
+            _certificate_folder = folder
+        return str(Path(_certificate_folder.name) / "cacert.pem")
+
 
 def connection_options(url):
     if not url:
         return {"check_same_thread": False}
     options = {"connect_timeout": 10}
     if make_url(url).host not in ("127.0.0.1", "localhost", "::1"):
-        import certifi
-        options.update(sslmode="verify-full", sslrootcert=certifi.where())
+        options.update(sslmode="verify-full", sslrootcert=root_certificate_file())
     return options
 
 

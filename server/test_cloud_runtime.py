@@ -180,6 +180,9 @@ class CloudTests(unittest.TestCase):
         options = db.connection_options("postgresql+psycopg://fixture:fixture@db.example.test/fixture")
         self.assertEqual(options["sslmode"], "verify-full")
         self.assertTrue(os.path.isfile(options["sslrootcert"]))
+        import certifi
+        from pathlib import Path
+        self.assertEqual(Path(options["sslrootcert"]).read_bytes(), Path(certifi.where()).read_bytes())
         import bili_api
         import bili_login
         with httpx.Client(cookies=bili_api.scoped_cookies({"SESSDATA": "cookie-fixture"})) as client:

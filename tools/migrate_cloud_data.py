@@ -2,7 +2,7 @@
 
 Use DATABASE_URL in the process environment, never a command-line password.
 Copies content tables, checks counts, and fixes serial sequences. Credentials
-are deliberately excluded; use the owner UI to configure the official API.
+are deliberately excluded; model keys belong only in deployment Secrets.
 """
 import argparse
 import os

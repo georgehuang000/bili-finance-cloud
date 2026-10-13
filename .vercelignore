@@ -14,3 +14,6 @@ web/dist-public/**
 tools/**
 docs/**
 .git/**
+.agents/**
+.claude/**
+skills-lock.json

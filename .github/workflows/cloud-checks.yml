@@ -1,0 +1,49 @@
+name: Cloud safety checks
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: bili_test
+          POSTGRES_PASSWORD: bili_local_test
+          POSTGRES_DB: bili_cloud_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bili_test -d bili_cloud_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: pip install -r server/requirements-cloud.txt
+      - name: Check cloud permission and persistence contracts
+        env:
+          CLOUD_MODE: 'true'
+          DATABASE_URL: postgresql+psycopg://bili_test:bili_local_test@127.0.0.1:5432/bili_cloud_test
+        run: python -m unittest discover -s server -p test_cloud_runtime.py -v
+      - name: Check analysis and evidence contracts
+        run: python -m unittest discover -s server -p test_finance_analysis.py -v
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Build frontend
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
