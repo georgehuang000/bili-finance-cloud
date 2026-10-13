@@ -32,7 +32,8 @@ DEFAULT_TIMEOUT = 120.0
 
 def build_client(api_key: str, base_url: str, timeout: float = DEFAULT_TIMEOUT) -> OpenAI:
     """按显式参数建客户端（用于"保存前先测试"，不读 config）。"""
-    return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+    return OpenAI(api_key=api_key, base_url=base_url, timeout=timeout,
+                  max_retries=0 if config.CLOUD_MODE and config.CLOUD_TEST_MODE else 2)
 
 
 def get_client() -> OpenAI:
@@ -205,7 +206,7 @@ def test_connection(api_key: str, base_url: str, model: str, vision: bool = Fals
     if not model:
         return {"ok": False, "error": "请先填写模型名"}
 
-    kwargs = {"model": model, "messages": [], "timeout": timeout}
+    kwargs = {"model": model, "messages": [], "timeout": timeout, "max_tokens": 256}
     if vision:
         import base64
 
@@ -236,11 +237,13 @@ def test_connection(api_key: str, base_url: str, model: str, vision: bool = Fals
         msg = resp.choices[0].message
         reply = (getattr(msg, "content", "") or "").strip()
         return {
-            "ok": True,
+            "ok": bool(reply),
             "model": model,
             "latency_ms": latency,
             "reply": reply[:120],
             "vision": vision,
+            "usage": {key: getattr(getattr(resp, "usage", None), key, None) for key in ("prompt_tokens", "completion_tokens", "total_tokens")},
+            **({"error": "模型未返回正文，请关闭思考模式后重试"} if not reply else {}),
         }
     except Exception as ex:
         hint, status = describe_error(ex)

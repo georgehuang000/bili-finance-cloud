@@ -95,6 +95,7 @@ export default function Research() {
       <p className="research-auto-note">{readOnly ? '查看已发布的自动分析' : data?.status?.automatic === false ? '自动分析未开启，可手动分析已有素材' : '每轮采集后自动分析新素材'} · 切换仅查看结果</p>
     </div>
     {!readOnly && <div className="research-run" aria-live="polite">
+      {data?.cloud_jobs?.[0] && <span>最近云端任务：{({queued:'排队中',running:'执行中',complete:'已完成',failed:'失败',interrupted:'已中断'})[data.cloud_jobs[0].status]} · {data.cloud_jobs[0].message || '等待执行'}</span>}
       {data?.status?.running ? <span>正在分析 {data.status.current_author || '已有素材'} · 本轮已处理 {data.status.processed} 条</span> : lastRun ? <span>最近任务（{lastRun.uid ? uppers.find(u=>u.uid===lastRun.uid)?.name || '单个UP主' : '全部UP主'}）{fmtFullTime(lastRun.finished_ts || lastRun.started_ts)} · 已处理 {lastRun.processed} 条素材{lastRun.failed ? ` · ${lastRun.failed} 条失败，稍后自动重试` : ''}{lastRun.status === 'interrupted' ? ' · 上次任务被中断，将增量续跑' : ''}</span> : <span>新内容会自动进入分析；也可补分析已有素材。</span>}
       {data?.status?.configured === false && <span className="research-warning">请先在模型设置中配置分析模型。</span>}
     </div>}

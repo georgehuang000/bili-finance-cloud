@@ -143,10 +143,12 @@ def _call_llm(system: str, user: str):
     if not llm_client.thinking_enabled():
         kwargs["temperature"] = 0.4  # 思考模式不接受 temperature，故仅在非思考模式下传
     kwargs.update(llm_client.thinking_kwargs())
+    if config.CLOUD_MODE and config.CLOUD_TEST_MODE:
+        kwargs["max_tokens"] = 6000
 
     last_err = "未知错误"
     last_status = None
-    for attempt in range(3):  # 1 try + 2 retries
+    for attempt in range(1 if config.CLOUD_MODE and config.CLOUD_TEST_MODE else 3):
         try:
             resp = client.chat.completions.create(
                 model=model,

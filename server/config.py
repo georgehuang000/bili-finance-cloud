@@ -83,7 +83,7 @@ FINANCE_AUTO_ANALYSIS = _get("FINANCE_AUTO_ANALYSIS", "false" if CLOUD_MODE else
 
 # --- 图片识别（vision）---
 # 是否对新增内容里的图片做识别。默认开；没有可用 key 时会自动跳过，不会报错。
-VISION_ENABLED = _get("VISION_ENABLED", "true").lower() in ("1", "true", "yes")
+VISION_ENABLED = _get("VISION_ENABLED", "false" if CLOUD_MODE and CLOUD_TEST_MODE else "true").lower() in ("1", "true", "yes")
 # 每轮最多识别几张图。图片成本很低（单图最多约 1024 tokens，约 ¥0.001），
 # 但耗时是串行的，所以要有个闸门，避免一轮里堆几百张把爬取拖住。
 VISION_MAX_IMAGES_PER_ROUND = _get_int("VISION_MAX_IMAGES_PER_ROUND", 20)

@@ -7,7 +7,7 @@
 ```
 B站 Web API (纯 httpx 直调, 默认)  →  server (FastAPI 后端 + SQLite + APScheduler)  →  web/dist (React 构建产物)
                 │                                    ↓
-                │  USE_PURE_API=false 时回退          DeepSeek LLM (SenseTime 网关) 生成日报
+                │  USE_PURE_API=false 时回退          OpenAI兼容API（默认DeepSeek官方）生成日报
                 └── external/MediaCrawler (无头浏览器子进程)
 ```
 

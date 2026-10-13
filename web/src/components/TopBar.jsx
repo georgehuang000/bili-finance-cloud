@@ -196,7 +196,7 @@ export default function TopBar() {
             <GearIcon />
             <span className="btn-text">模型设置</span>
           </button>
-          <button className="btn" aria-label="立即爬取" onClick={handleCrawl} disabled={crawlPending || crawling}>
+          {!(cloud && testMode) && <><button className="btn" aria-label="立即爬取" onClick={handleCrawl} disabled={crawlPending || crawling}>
             {crawling ? <span className="spinner" /> : <RefreshIcon />}
             <span className="btn-text">立即爬取</span>
           </button>
@@ -204,6 +204,7 @@ export default function TopBar() {
             {summarizing ? <span className="spinner" /> : <PenIcon />}
             <span className="btn-text">立即总结</span>
           </button>
+          </>}
           </>}
         </div>
       </div>

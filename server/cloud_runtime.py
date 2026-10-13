@@ -123,7 +123,7 @@ def logout(request):
 
 def same_origin(request):
     origin = request.headers.get("origin")
-    return not origin or urlsplit(origin).netloc == request.url.netloc
+    return not origin or (urlsplit(origin).netloc == request.url.netloc and urlsplit(origin).scheme == request.url.scheme)
 
 
 def _cipher():

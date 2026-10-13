@@ -124,7 +124,7 @@ export default function ModelSettingsDialog({ open, onClose, onSaved }) {
           ok: true,
           text: `${withVision ? '图片识别' : '文本'}连通正常 · 模型 ${r.model} · 耗时 ${r.latency_ms}ms${
             r.reply ? ` · 返回「${r.reply}」` : ''
-          }`,
+          }${r.usage?.total_tokens != null ? ` · 输入 ${r.usage.prompt_tokens} / 输出 ${r.usage.completion_tokens} tokens` : ''}`,
         })
       } else {
         setResult({ ok: false, text: r.error || '测试失败' })

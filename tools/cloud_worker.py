@@ -26,9 +26,14 @@ def execute(job):
     kind, uid, payload = job["kind"], job["uid"], job["payload"]
     if kind in ("crawl", "scheduled"):
         if uid:
-            crawler_runner.crawl_single(uid)
+            result = crawler_runner.crawl_single(uid)
+            combined = result.get("detail", {}).get("combined", {})
+            if not result.get("ok") or combined.get("error"):
+                raise ValueError("B站采集未成功，请检查扫码登录状态或云端出口风控")
         else:
             crawler_runner.run_full_round_sync()
+            if crawler_runner.STATE.get("login_required") or any(value.get("last_error") for value in crawler_runner.STATE["uppers"].values()):
+                raise ValueError("部分B站采集未成功，请检查登录和作者状态")
         if kind == "scheduled":
             summarizer.generate_sync(payload.get("period", "cloud"))
         if not config.CLOUD_TEST_MODE and config.FINANCE_AUTO_ANALYSIS:
@@ -55,6 +60,10 @@ def main():
     db.init_db()
     analysis.init_store()
     evidence.init_store()
+    state = cloud.load_state("crawl")
+    for key in ("uppers", "enrich", "vision", "login_required", "last_summary_error"):
+        if key in state:
+            crawler_runner.STATE[key] = state[key]
     if args.scheduled:
         if os.environ.get("CLOUD_SCHEDULE_ENABLED") != "true" or config.CLOUD_TEST_MODE:
             print("测试阶段定时采集关闭")
@@ -76,6 +85,8 @@ def main():
         else:
             cloud.finish_job(job["id"])
             print(f"job={job['id']} kind={job['kind']} complete")
+        finally:
+            crawler_runner._save_state()
     db.engine.dispose()
     if failures:
         raise SystemExit(1)

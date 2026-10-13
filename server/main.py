@@ -58,6 +58,8 @@ async def lifespan(app: FastAPI):
         db.init_db()
         finance_analysis.init_store()
         finance_evidence.init_store()
+        if config.CLOUD_MODE and config.CREDENTIAL_ENCRYPTION_KEY:
+            cloud.refresh_settings()
     scheduler.start()
     yield
     scheduler.shutdown()
@@ -207,7 +209,8 @@ def get_research(request: Request, uid: str | None = Query(None, pattern=r"^\d{3
         if not request.state.owner:
             state.pop("errors", None)
     return {"claims": finance_analysis.list_claims(uid, topic),
-            "status": state, "evidence_jobs": finance_evidence.jobs(uid)}
+            "status": state, "evidence_jobs": finance_evidence.jobs(uid),
+            "cloud_jobs": cloud.jobs() if config.CLOUD_MODE and request.state.owner else []}
 
 
 class AnalyzeReq(BaseModel):
