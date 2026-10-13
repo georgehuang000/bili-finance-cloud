@@ -25,7 +25,10 @@ def main():
         assert health.status_code == 200 and health.json()["ok"] and health.json()["cloud"]
         assert client.get("/api/auth/session").json()["can_manage"] is False
         authors = client.get("/api/uppers").json()
-        assert len(authors) == 7
+        assert isinstance(authors, list) and authors, "Subscribed authors missing"
+        assert all(isinstance(author, dict) and isinstance(author.get("uid"), str)
+                   and author["uid"].isdigit() and author.get("name") for author in authors)
+        assert len({author["uid"] for author in authors}) == len(authors), "Duplicate author UID"
         for path in ("/api/uppers/search?q=fixture", "/api/llm/status", "/api/jobs", "/api/login/status"):
             assert client.get(path).status_code == 401, f"Private route exposed: {path}"
         for path in ("/api/crawl", "/api/uppers", "/api/llm/test", "/api/login/qrcode"):
