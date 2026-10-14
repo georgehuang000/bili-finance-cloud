@@ -58,9 +58,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--scheduled", action="store_true")
     parser.add_argument("--period", choices=("morning", "evening"))
+    parser.add_argument("--enqueue-only", action="store_true", help="Submit a scheduled report without executing queued jobs")
     args = parser.parse_args()
     if args.scheduled and not args.period:
         parser.error("--scheduled requires --period morning or evening")
+    if args.enqueue_only and not args.scheduled:
+        parser.error("--enqueue-only requires --scheduled")
     if not cloud.ready():
         print("DATABASE_URL 尚未配置；未运行任何收费任务")
         return
@@ -74,6 +77,9 @@ def main():
         else:
             result = cloud.enqueue_scheduled(args.period)
             print(result["message"])
+    if args.enqueue_only:
+        db.engine.dispose()
+        return
     failures = 0
     for _ in range(5):
         job = cloud.take_job()

@@ -1,0 +1,23 @@
+[Unit]
+Description=Bili finance owner-protected API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bili-api
+Group=bili-app
+WorkingDirectory=/opt/bili-finance/current/server
+EnvironmentFile=/etc/bili-finance/api.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/bili-finance/venv/bin/python -m uvicorn vps_entry:app --host 127.0.0.1 --port 9000 --workers 1 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

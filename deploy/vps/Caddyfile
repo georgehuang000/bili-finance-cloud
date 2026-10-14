@@ -1,0 +1,39 @@
+{
+    default_sni 82.157.178.52
+}
+
+82.157.178.52 {
+    tls {
+        issuer acme {
+            dir https://acme-v02.api.letsencrypt.org/directory
+            profile shortlived
+        }
+    }
+    encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy no-referrer
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Strict-Transport-Security "max-age=31536000"
+        Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https: data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+    }
+    @api path /api /api/*
+    handle @api {
+        reverse_proxy 127.0.0.1:9000 {
+            # Replace spoofable client headers before the loopback proxy.
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up -X-Vercel-Forwarded-For
+        }
+    }
+    @private path /.env* /.git/* /server/* /tools/* /deploy/*
+    handle @private {
+        respond 404
+    }
+    handle {
+        root * /opt/bili-finance/current/web/dist
+        try_files {path} /index.html
+        file_server
+    }
+}

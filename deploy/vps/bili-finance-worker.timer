@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the Bili finance work queue every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+Unit=bili-finance-worker.service
+
+[Install]
+WantedBy=timers.target

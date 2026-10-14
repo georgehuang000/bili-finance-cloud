@@ -1,0 +1,25 @@
+[Unit]
+Description=Bili finance scheduled %i report
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=bili-worker
+Group=bili-app
+WorkingDirectory=/opt/bili-finance/current
+EnvironmentFile=/etc/bili-finance/worker.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+RuntimeDirectory=bili-finance-worker
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+# Enqueue before the process lock: a busy worker cannot drop the daily slot.
+ExecStartPre=/opt/bili-finance/venv/bin/python tools/cloud_worker.py --scheduled --period %i --enqueue-only
+ExecStart=/usr/bin/flock --nonblock --conflict-exit-code 75 /run/bili-finance-worker/job.lock /opt/bili-finance/venv/bin/python tools/cloud_worker.py
+SuccessExitStatus=75
+TimeoutStartSec=7200
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+UMask=0077

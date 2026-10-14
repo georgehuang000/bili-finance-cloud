@@ -383,6 +383,17 @@ class CloudTests(unittest.TestCase):
         with patch.object(cloud, "report_date", return_value="2026-10-15"):
             self.assertTrue(cloud.enqueue_scheduled("morning")["ok"])
 
+    def test_scheduled_enqueue_only_never_claims_or_runs_a_job(self):
+        import importlib.util
+        from pathlib import Path
+        spec = importlib.util.spec_from_file_location("vps_worker_check", Path(__file__).resolve().parents[1] / "tools/cloud_worker.py")
+        worker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(worker)
+        with patch("sys.argv", ["cloud_worker.py", "--scheduled", "--period", "morning", "--enqueue-only"]), patch.dict(os.environ, {"CLOUD_SCHEDULE_ENABLED": "true"}), patch.object(config, "CLOUD_TEST_MODE", False), patch.object(cloud, "enqueue_scheduled", return_value={"ok": True, "message": "fixture"}) as enqueue, patch.object(cloud, "take_job") as claim:
+            worker.main()
+            enqueue.assert_called_once_with("morning")
+            claim.assert_not_called()
+
     def test_queue_deduplicates_parallel_calls_and_cold_start_preserves_running(self):
         with ThreadPoolExecutor(max_workers=4) as pool:
             results = list(pool.map(lambda _: cloud.enqueue("analyze", "1000", {"per_upper": 1}), range(4)))

@@ -1,0 +1,10 @@
+[Unit]
+Description=Bili finance Beijing morning report
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 Asia/Shanghai
+Persistent=true
+Unit=bili-finance-report@morning.service
+
+[Install]
+WantedBy=timers.target

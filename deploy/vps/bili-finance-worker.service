@@ -1,0 +1,23 @@
+[Unit]
+Description=Bili finance queued collection and AI worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=bili-worker
+Group=bili-app
+WorkingDirectory=/opt/bili-finance/current
+EnvironmentFile=/etc/bili-finance/worker.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+RuntimeDirectory=bili-finance-worker
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/bin/flock --nonblock --conflict-exit-code 75 /run/bili-finance-worker/job.lock /opt/bili-finance/venv/bin/python tools/cloud_worker.py
+SuccessExitStatus=75
+TimeoutStartSec=7200
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+UMask=0077
