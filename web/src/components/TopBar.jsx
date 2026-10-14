@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { NavLink } from 'react-router-dom'
 import { getStatus, postCrawl, postSummarize, testLlm } from '../api'
 import LoginDialog from './LoginDialog'
@@ -71,6 +72,24 @@ export default function TopBar() {
   const [loginOpen, setLoginOpen] = useState(false)
   const [modelPending, setModelPending] = useState(false)
   const timerRef = useRef(null)
+
+  const closeOwner = useCallback(() => {
+    setOwnerOpen(false)
+    setOwnerPassword('')
+    setOwnerError('')
+  }, [])
+
+  useEffect(() => {
+    if (!ownerOpen) return
+    const previousOverflow = document.body.style.overflow
+    const onKey = event => { if (event.key === 'Escape') closeOwner() }
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [ownerOpen, closeOwner])
 
   const poll = useCallback(async () => {
     try {
@@ -213,16 +232,17 @@ export default function TopBar() {
           </>}
         </div>
       </div>
-      {ownerOpen && <div className="modal-mask" onClick={() => setOwnerOpen(false)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="owner-title" onClick={e => e.stopPropagation()}>
-        <div className="modal-head"><h3 id="owner-title" className="modal-title">管理登录</h3><button className="modal-close" aria-label="关闭" onClick={() => { setOwnerOpen(false); setOwnerPassword('') }}>×</button></div>
+      {/* Match the QR dialog: fixed overlays must escape the filtered topbar. */}
+      {ownerOpen && createPortal(<div className="modal-mask" onClick={closeOwner}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="owner-title" onClick={e => e.stopPropagation()}>
+        <div className="modal-head"><h3 id="owner-title" className="modal-title">管理登录</h3><button className="modal-close" aria-label="关闭" onClick={closeOwner}>×</button></div>
         <form className="modal-body" onSubmit={async e => {
           e.preventDefault(); setOwnerPending(true); setOwnerError('')
           try { await login(ownerPassword); setOwnerPassword(''); setOwnerOpen(false); poll() }
           catch (error) { setOwnerError(error.message) }
           finally { setOwnerPending(false) }
-        }}><label htmlFor="owner-password">管理密码</label><input id="owner-password" type="password" autoComplete="current-password" required value={ownerPassword} onChange={e => setOwnerPassword(e.target.value)} style={{ width: '100%', margin: '12px 0', padding: 12 }}/>
+        }}><label htmlFor="owner-password">管理密码</label><input id="owner-password" type="password" autoComplete="current-password" autoFocus required value={ownerPassword} onChange={e => setOwnerPassword(e.target.value)} style={{ width: '100%', margin: '12px 0', padding: 12 }}/>
           {ownerError && <p role="alert">{ownerError}</p>}<button className="btn primary" disabled={ownerPending}>{ownerPending ? '登录中…' : '登录'}</button>
-        </form></section></div>}
+        </form></section></div>, document.body)}
       {!readOnly && <LoginDialog
         open={loginOpen}
         onClose={() => setLoginOpen(false)}
