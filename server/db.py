@@ -301,6 +301,11 @@ def upsert_videos(rows: Iterable[dict]) -> int:
     return n
 
 
+def count_videos(uid: str) -> int:
+    with session_scope() as session:
+        return session.scalar(select(func.count()).select_from(Video).where(Video.uid == str(uid))) or 0
+
+
 def upsert_dynamics(rows: Iterable[dict]) -> int:
     rows = list(rows)
     if not rows:

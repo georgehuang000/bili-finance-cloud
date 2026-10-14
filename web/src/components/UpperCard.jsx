@@ -82,7 +82,7 @@ export default function UpperCard({ upper, index = 0, onChanged }) {
         <div className="upper-crawl">{readOnly ? '最近更新' : '上次爬取'} · {fmtAgo(upper.last_crawl_ts)}</div>
         {upper.history_status && (
           <div className="upper-crawl">
-            {upper.history_status === 'complete' ? '历史采集完成' : upper.history_status === 'limited' ? `可访问历史已采集 · ${upper.history_video_missing || 0} 条投稿未返回` : upper.history_status === 'error' ? '历史补齐待重试' : '历史内容补齐中'}
+            {upper.history_status === 'complete' ? '历史采集完成' : upper.history_status === 'limited' ? '历史范围未核全 · 接口返回不完整' : upper.history_status === 'error' ? '历史补齐待重试' : '历史内容补齐中'}
           </div>
         )}
         {!readOnly && crawlIssue && (

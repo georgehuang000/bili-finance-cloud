@@ -97,7 +97,12 @@ def main():
             cloud.finish_job(job["id"], message, failed=True)
             print(f"job={job['id']} kind={job['kind']} failed ({type(error).__name__})")
         else:
-            cloud.finish_job(job["id"], "本批历史采集完成，继续补齐" if continuation else "执行完成")
+            selected = [str(job["uid"])] if job["uid"] else db.subscribed_uids()
+            limited = job["kind"] in ("crawl", "scheduled") and any(
+                crawler_runner.STATE["uppers"].get(uid, {}).get("history", {}).get("status") == "limited"
+                for uid in selected)
+            message = "本批历史采集完成，继续补齐" if continuation else "可访问内容已采集，历史范围尚未核全" if limited else "执行完成"
+            cloud.finish_job(job["id"], message)
             for uid in continuation:
                 cloud.enqueue("crawl", uid)
             print(f"job={job['id']} kind={job['kind']} complete")

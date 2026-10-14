@@ -43,22 +43,35 @@ async def crawl(uid, progress, checkpoint, *, page_budget=PAGES_PER_BATCH):
                                 feed_pages=progress.get("feed_pages", 0) + 1)
                 seen_feed.add(next_offset)
             elif not progress.get("videos_done"):
-                page = await bili_api.fetch_archive_page(uid, progress.get("video_oid", ""),
-                                                        page=progress.get("video_pages", 0) + 1,
-                                                        source=progress.get("video_source"))
+                try:
+                    page = await bili_api.fetch_archive_page(uid, progress.get("video_oid", ""),
+                                                            page=progress.get("video_pages", 0) + 1,
+                                                            source=progress.get("video_source"))
+                except bili_api.BiliApiError as error:
+                    if progress.get("video_source") != "legacy":
+                        raise
+                    # Keep committed rows, reset counters for the fallback, and
+                    # retain the larger source's declared scope as a coverage gap.
+                    progress["video_reference_total"] = max(progress.get("video_reference_total", 0), progress.get("video_total", 0))
+                    progress["video_source_error"] = error.code
+                    progress.update(video_source="medialist", video_pages=0, video_items=0, video_oid="")
+                    seen_video = {""}
+                    checkpoint()
+                    continue
                 if page["has_more"] and (not page["rows"] or not page["next_oid"] or page["next_oid"] in seen_video):
                     raise ValueError("history_videos_no_progress")
                 if not page["rows"] and page["total"] and not progress.get("video_pages"):
                     raise ValueError("history_videos_empty_payload")
                 videos += db.upsert_videos(page["rows"])
                 collected = progress.get("video_items", 0) + len(page["rows"])
+                expected = max(page["total"], progress.get("video_reference_total", 0))
                 progress.update(videos_done=not page["has_more"],
                                 video_oid=page["next_oid"] if page["has_more"] else "",
                                 video_pages=progress.get("video_pages", 0) + 1,
                                 video_source=page.get("source", "medialist"),
                                 video_items=collected,
-                                video_missing=max(0, page["total"] - collected) if not page["has_more"] else 0,
-                                video_total=page["total"])
+                                video_missing=max(0, expected - db.count_videos(uid)) if not page["has_more"] else 0,
+                                video_source_total=page["total"], video_total=expected)
                 seen_video.add(page["next_oid"])
             if progress.get("feed_done") and progress.get("videos_done"):
                 progress["status"] = "limited" if progress.get("video_missing") else "complete"

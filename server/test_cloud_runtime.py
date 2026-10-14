@@ -82,6 +82,21 @@ class CloudTests(unittest.TestCase):
         job = cloud.take_job()
         self.assertEqual(job["payload"], {"full_history": True})
 
+    def test_worker_job_message_distinguishes_partial_history_from_full_completion(self):
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+        import cloud_worker
+        job = {"id": 99, "kind": "crawl", "uid": "1000", "payload": {}}
+        with patch("sys.argv", ["cloud_worker.py"]), \
+             patch.object(cloud, "ready", return_value=True), patch.object(cloud, "load_state", return_value={}), \
+             patch.object(cloud, "take_job", side_effect=[job, None]), \
+             patch.object(cloud_worker, "execute", return_value=[]), \
+             patch.dict(cloud_worker.crawler_runner.STATE, {"uppers": {"1000": {"history": {"status": "limited"}}}}), \
+             patch.object(cloud_worker.crawler_runner, "_save_state"), patch.object(cloud, "finish_job") as finish:
+            cloud_worker.main()
+        self.assertIn("尚未核全", finish.call_args.args[1])
+
     def test_persistent_login_limits_do_not_lock_another_source(self):
         with patch.dict(os.environ, {"VERCEL": "1", "VERCEL_ENV": "production"}):
             attacker = {"x-vercel-forwarded-for": "192.0.2.10"}

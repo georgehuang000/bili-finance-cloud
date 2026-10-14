@@ -35,6 +35,7 @@ class HistoryTests(unittest.TestCase):
             return len(rows)
         self.patches = [patch.object(history.db, "upsert_dynamics", side_effect=upsert_dyn),
                         patch.object(history.db, "upsert_videos", side_effect=upsert_vid),
+                        patch.object(history.db, "count_videos", side_effect=lambda uid: len(self.video_ids)),
                         patch.object(bili_api, "_has_history", return_value=False),
                         patch.object(history.asyncio, "sleep", new=AsyncMock())]
         for item in self.patches:
@@ -129,6 +130,7 @@ class HistoryTests(unittest.TestCase):
         self.assertFalse(result["history_pending"])
 
     def test_verified_video_end_with_missing_items_does_not_block_dynamics(self):
+        self.video_ids = {f"known-{i}" for i in range(398)}
         self.progress.update(video_pages=14, video_items=398, video_oid="last")
         with patch.object(bili_api, "fetch_archive_page", new=AsyncMock(return_value={
                 "rows": [], "total": 401, "has_more": False, "next_oid": ""})), \
@@ -138,6 +140,24 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(self.progress["status"], "limited")
         self.assertEqual(self.progress["video_missing"], 3)
         self.assertTrue(self.progress["feed_done"])
+
+    def test_mid_history_source_limit_falls_back_with_separate_counters(self):
+        self.progress.update(video_source="legacy", video_pages=1, video_items=50,
+                             video_total=531, video_oid="old-cursor")
+        self.video_ids = {f"known-{i}" for i in range(50)}
+        fallback = archive("new-video", total=51)
+        fallback["source"] = "medialist"
+        with patch.object(bili_api, "fetch_archive_page", new=AsyncMock(side_effect=[
+                bili_api.BiliApiError(-799, "fixture"), fallback])) as fetch, \
+             patch.object(bili_api, "fetch_space_feed_page", new=AsyncMock(return_value=feed("last-dynamic"))):
+            self.run_history()
+        self.assertEqual(fetch.call_args_list[0].kwargs["page"], 2)
+        self.assertEqual(fetch.call_args_list[1].kwargs["page"], 1)
+        self.assertEqual(fetch.call_args_list[1].kwargs["source"], "medialist")
+        self.assertEqual(self.progress["video_items"], 1)
+        self.assertEqual(self.progress["video_missing"], 480)
+        self.assertEqual(self.progress["status"], "limited")
+        self.assertEqual(self.dynamic_ids, {"last-dynamic"})
 
     def test_new_author_or_interrupted_backfill_never_uses_recent_refresh(self):
         for prior, populated in [(None, False), ({"status": "error", "feed_offset": "a"}, True)]:
