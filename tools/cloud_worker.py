@@ -18,11 +18,39 @@ import finance_evidence as evidence
 import summarizer
 
 
+def enqueue_history_recoveries():
+    """Retry only missing archive scope once daily, after fresh data/report work."""
+    now = int(time.time())
+    queued = []
+    for uid in db.subscribed_uids():
+        history = crawler_runner.STATE["uppers"].get(uid, {}).get("history", {})
+        if history.get("status") != "limited" or not history.get("video_missing"):
+            continue
+        if now - history.get("recovery_queued_ts", 0) < 86400:
+            continue
+        result = cloud.enqueue("crawl", uid, {"history_recovery": True})
+        if result["ok"]:
+            history["recovery_queued_ts"] = now
+            queued.append(uid)
+    if queued:
+        crawler_runner._save_state()
+    return queued
+
+
 def execute(job):
     cloud.refresh_settings()
     if config.LLM_BASE_URL != config.CLOUD_LLM_BASES.get(config.LLM_PROVIDER):
         raise ValueError("云端分析服务地址不符合官方服务商配置")
     kind, uid, payload = job["kind"], job["uid"], job["payload"]
+    if kind == "crawl" and uid and payload.get("history_recovery"):
+        history = crawler_runner.STATE["uppers"].get(str(uid), {}).get("history", {})
+        if history.get("status") != "limited":
+            return []
+        history["video_reference_total"] = max(history.get("video_reference_total", 0), history.get("video_total", 0))
+        history.update(status="pending", videos_done=False, video_source=None,
+                       video_pages=0, video_items=0, video_oid="")
+        history.pop("error", None)
+        crawler_runner._save_state()
     if kind in ("crawl", "scheduled"):
         if uid:
             result = crawler_runner.crawl_single(uid, full_history=bool(payload.get("full_history")))
@@ -39,6 +67,7 @@ def execute(job):
         if kind == "scheduled":
             if not summarizer.generate_sync(payload["period"], date=payload.get("date")):
                 raise ValueError("已有日报任务运行中，本轮未生成")
+            enqueue_history_recoveries()
         if not config.CLOUD_TEST_MODE and config.FINANCE_AUTO_ANALYSIS:
             analysis.run_batch(uid, per_upper=4)
     elif kind == "analyze":

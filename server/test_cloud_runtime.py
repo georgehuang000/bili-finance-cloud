@@ -97,6 +97,30 @@ class CloudTests(unittest.TestCase):
             cloud_worker.main()
         self.assertIn("尚未核全", finish.call_args.args[1])
 
+    def test_history_gap_recovery_is_daily_and_preserves_completed_dynamics(self):
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+        import cloud_worker
+        history = {"status": "limited", "video_missing": 3, "video_total": 401,
+                   "videos_done": True, "feed_done": True, "feed_pages": 141, "feed_offset": ""}
+        with patch.dict(cloud_worker.crawler_runner.STATE, {"uppers": {"1000": {"history": history}}}), \
+             patch.object(db, "subscribed_uids", return_value=["1000"]), \
+             patch.object(cloud_worker.crawler_runner, "_save_state"), \
+             patch.object(cloud, "enqueue", return_value={"ok": True}) as enqueue, \
+             patch.object(cloud_worker.time, "time", return_value=100000):
+            self.assertEqual(cloud_worker.enqueue_history_recoveries(), ["1000"])
+            self.assertEqual(cloud_worker.enqueue_history_recoveries(), [])
+            enqueue.assert_called_once_with("crawl", "1000", {"history_recovery": True})
+            with patch.object(cloud, "refresh_settings"), patch.object(config, "FINANCE_AUTO_ANALYSIS", False), \
+                 patch.object(cloud_worker.crawler_runner, "crawl_single", return_value={"ok": True, "detail": {"combined": {"error": None}}}):
+                cloud_worker.execute({"kind": "crawl", "uid": "1000", "payload": {"history_recovery": True}})
+        self.assertEqual(history["status"], "pending")
+        self.assertFalse(history["videos_done"])
+        self.assertTrue(history["feed_done"])
+        self.assertEqual(history["feed_pages"], 141)
+        self.assertEqual(history["recovery_queued_ts"], 100000)
+
     def test_persistent_login_limits_do_not_lock_another_source(self):
         with patch.dict(os.environ, {"VERCEL": "1", "VERCEL_ENV": "production"}):
             attacker = {"x-vercel-forwarded-for": "192.0.2.10"}
