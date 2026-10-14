@@ -12,6 +12,7 @@ from unittest.mock import patch, AsyncMock
 from types import SimpleNamespace
 import time
 import httpx
+import pyotp
 
 from fastapi.testclient import TestClient
 from sqlalchemy import inspect, text
@@ -67,11 +68,143 @@ class CloudTests(unittest.TestCase):
         self.client.post("/api/auth/logout")
         self.assertEqual(self.client.post("/api/crawl").status_code, 401)
 
-    def test_persistent_login_rate_limit(self):
-        for _ in range(10):
-            self.assertEqual(self.client.post("/api/auth/login", json={"password": "wrong"}).status_code, 401)
-        result = self.client.post("/api/auth/login", json={"password": "fixture-password"})
-        self.assertIn("15分钟", result.json()["detail"])
+    def test_persistent_login_limits_do_not_lock_another_source(self):
+        with patch.dict(os.environ, {"VERCEL": "1", "VERCEL_ENV": "production"}):
+            attacker = {"x-vercel-forwarded-for": "192.0.2.10"}
+            owner = {"x-vercel-forwarded-for": "192.0.2.20"}
+            for _ in range(10):
+                self.assertEqual(self.client.post("/api/auth/login", headers=attacker, json={"password": "wrong"}).status_code, 401)
+            # A different function/client instance shares the same persisted cap.
+            other = TestClient(main.app, base_url="https://testserver")
+            blocked = other.post("/api/auth/login", headers=attacker, json={"password": "fixture-password"})
+            self.assertEqual(blocked.status_code, 429)
+            self.assertEqual(self.client.post("/api/auth/login", headers=owner, json={"password": "fixture-password"}).status_code, 200)
+            with patch("owner_auth.time.time", return_value=time.time() + 901):
+                self.assertEqual(other.post("/api/auth/login", headers=attacker, json={"password": "fixture-password"}).status_code, 200)
+
+    def test_source_headers_cannot_bypass_limits_and_ipv6_is_canonical(self):
+        import owner_auth as auth
+        request = SimpleNamespace(client=SimpleNamespace(host="192.0.2.10"), headers={"x-vercel-forwarded-for": "198.51.100.10"})
+        with patch.dict(os.environ, {"VERCEL": "0"}):
+            first = auth.source_key(request)
+            request.headers["x-vercel-forwarded-for"] = "198.51.100.11"
+            self.assertEqual(auth.source_key(request), first)
+        with patch.dict(os.environ, {"VERCEL": "1", "VERCEL_ENV": "production"}):
+            request.headers["x-vercel-forwarded-for"] = "2001:db8::1"
+            first = auth.source_key(request)
+            for address in ("2001:0db8:0000:0000:0000:0000:0000:0001", "2001:db8::2"):
+                request.headers["x-vercel-forwarded-for"] = address
+                self.assertEqual(auth.source_key(request), first)
+            for address in ("192.0.2.1, 192.0.2.2", "invalid", " 192.0.2.1"):
+                request.headers["x-vercel-forwarded-for"] = address
+                self.assertIsNone(auth.source_key(request))
+            request.headers["x-vercel-forwarded-for"] = "::ffff:192.0.2.10"
+            mapped = auth.source_key(request)
+            request.headers["x-vercel-forwarded-for"] = "192.0.2.10"
+            self.assertEqual(auth.source_key(request), mapped)
+
+    def enroll(self):
+        self.owner()
+        result = self.client.post("/api/auth/mfa/setup", json={"password": "fixture-password"})
+        self.assertEqual(result.status_code, 200)
+        return result.json()
+
+    def activate(self, setup):
+        code = pyotp.TOTP(setup["manual_key"]).now()
+        result = self.client.post("/api/auth/mfa/confirm", json={"password": "fixture-password", "code": code})
+        self.assertEqual(result.status_code, 200)
+        return code
+
+    def test_mfa_pending_is_owner_bound_expiring_and_requires_password(self):
+        self.assertEqual(self.client.post("/api/auth/mfa/setup", json={"password": "fixture-password"}).status_code, 401)
+        setup = self.enroll()
+        self.assertFalse(self.client.get("/api/auth/session").json()["mfa_enabled"])
+        self.assertEqual(self.client.post("/api/auth/mfa/setup", json={"password": "wrong"}).status_code, 401)
+        second = TestClient(main.app, base_url="https://testserver")
+        self.assertEqual(second.post("/api/auth/login", json={"password": "fixture-password"}).status_code, 200)
+        code = pyotp.TOTP(setup["manual_key"]).now()
+        self.assertEqual(second.post("/api/auth/mfa/confirm", json={"password": "fixture-password", "code": code}).status_code, 401)
+        with patch("owner_auth.time.time", return_value=time.time() + 601):
+            self.assertEqual(self.client.post("/api/auth/mfa/confirm", json={"password": "fixture-password", "code": code}).status_code, 401)
+        self.assertFalse(self.client.get("/api/auth/session").json()["mfa_enabled"])
+        self.client.post("/api/auth/logout")
+        self.assertEqual(self.client.post("/api/auth/mfa/confirm", json={"password": "fixture-password", "code": code}).status_code, 401)
+
+    def test_mfa_activation_revokes_sessions_qr_and_secrets_are_private(self):
+        setup = self.enroll()
+        original_cookie = self.client.cookies.get(cloud.COOKIE)
+        request = SimpleNamespace(cookies={cloud.COOKIE: original_cookie})
+        cloud.register_qr("fixture-challenge-key", request)
+        self.activate(setup)
+        self.assertTrue(self.client.get("/api/auth/session").json()["mfa_enabled"])
+        self.assertFalse(cloud.is_owner(request))
+        self.assertEqual(cloud.begin_qr_poll("fixture-challenge-key", request), "invalid")
+        with db.session_scope() as session:
+            encrypted = session.get(cloud.OwnerFactor, "owner").encrypted
+            self.assertNotIn(setup["manual_key"], encrypted)
+            for value in setup["recovery_codes"]:
+                self.assertNotIn(value.replace("-", ""), cloud._cipher().decrypt(encrypted.encode()).decode())
+        self.assertEqual(cloud.read_settings(), {})
+        public = TestClient(main.app, base_url="https://testserver")
+        self.assertEqual(set(public.get("/api/auth/session").json()), {"cloud", "can_manage", "test_mode", "mfa_enabled"})
+        self.assertEqual(public.post("/api/auth/login", json={"password": "fixture-password"}).status_code, 401)
+        self.assertEqual(public.post("/api/auth/mfa/setup", json={"password": "fixture-password"}).status_code, 401)
+
+    def test_mfa_replay_unicode_and_concurrent_recovery_are_rejected(self):
+        setup = self.enroll()
+        used_code = self.activate(setup)
+        public = TestClient(main.app, base_url="https://testserver")
+        for code in (used_code, "１２３４５６"):
+            self.assertEqual(public.post("/api/auth/login", json={"password": "fixture-password", "code": code}).status_code, 401)
+        future = int(time.time()) + 60
+        with patch("owner_auth.time.time", return_value=future):
+            new_code = pyotp.TOTP(setup["manual_key"]).at(future)
+            self.assertEqual(public.post("/api/auth/login", json={"password": "fixture-password", "code": new_code}).status_code, 200)
+            self.assertEqual(public.post("/api/auth/login", json={"password": "fixture-password", "code": new_code}).status_code, 401)
+        # One recovery code may mint exactly one session, even concurrently.
+        def redeem(_):
+            client = TestClient(main.app, base_url="https://testserver")
+            return client.post("/api/auth/login", json={"password": "fixture-password", "recovery_code": setup["recovery_codes"][0]}).status_code
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(redeem, range(2)))
+        self.assertEqual(sorted(results), [200, 401])
+        self.assertFalse(self.client.get("/api/auth/session").json()["can_manage"])
+
+    def test_mfa_replacement_requires_old_factor_and_keeps_it_until_confirm(self):
+        setup = self.enroll()
+        self.activate(setup)
+        self.assertEqual(self.client.post("/api/auth/mfa/setup", json={"password": "fixture-password"}).status_code, 401)
+        result = self.client.post("/api/auth/mfa/setup", json={"password": "fixture-password", "recovery_code": setup["recovery_codes"][0]})
+        self.assertEqual(result.status_code, 200)
+        replacement = result.json()
+        with db.session_scope() as session:
+            data = json.loads(cloud._cipher().decrypt(session.get(cloud.OwnerFactor, "owner").encrypted.encode()))
+            self.assertEqual(data["secret"], setup["manual_key"])
+        self.activate(replacement)
+        public = TestClient(main.app, base_url="https://testserver")
+        self.assertEqual(public.post("/api/auth/login", json={"password": "fixture-password", "recovery_code": setup["recovery_codes"][1]}).status_code, 401)
+        self.assertEqual(public.post("/api/auth/login", json={"password": "fixture-password", "recovery_code": replacement["recovery_codes"][0]}).status_code, 200)
+
+    def test_mfa_migration_is_idempotent_and_worker_has_no_factor_grants(self):
+        import importlib.util
+        from pathlib import Path
+        spec = importlib.util.spec_from_file_location("mfa_migration", Path(__file__).resolve().parents[1] / "tools/migrate_owner_auth.py")
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        with db.engine.begin() as connection:
+            connection.exec_driver_sql("CREATE ROLE bili_cloud_api NOLOGIN")
+            connection.exec_driver_sql("CREATE ROLE bili_cloud_worker NOLOGIN")
+        try:
+            migration.migrate()
+            migration.migrate()
+            with db.engine.begin() as connection:
+                for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    self.assertTrue(connection.scalar(text("SELECT has_table_privilege('bili_cloud_api','cloud_owner_factors',:privilege)"), {"privilege": privilege}))
+                    self.assertFalse(connection.scalar(text("SELECT has_table_privilege('bili_cloud_worker','cloud_owner_factors',:privilege)"), {"privilege": privilege}))
+        finally:
+            with db.engine.begin() as connection:
+                connection.exec_driver_sql("DROP OWNED BY bili_cloud_api, bili_cloud_worker")
+                connection.exec_driver_sql("DROP ROLE bili_cloud_api, bili_cloud_worker")
 
     def test_cookies_are_encrypted_and_model_configuration_is_environment_only(self):
         cloud.save_settings({"BILI_SESSDATA": "synthetic-cookie-secret"})

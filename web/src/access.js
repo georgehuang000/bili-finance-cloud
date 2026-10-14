@@ -14,14 +14,14 @@ export function AccessProvider({ children }) {
       const response = await fetch('/api/auth/session', { cache: 'no-store' })
       if (!response.ok) throw new Error('session unavailable')
       const data = await response.json()
-      setState({ canManage: data.can_manage === true, cloud: data.cloud === true, testMode: data.test_mode === true })
+      setState({ canManage: data.can_manage === true, cloud: data.cloud === true, testMode: data.test_mode === true, mfaEnabled: data.mfa_enabled === true })
     } catch { setState({ canManage: false, cloud: false, testMode: false }) }
   }
   useEffect(() => { refresh() }, [])
-  const login = async password => {
-    const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) })
+  const login = async (password, code = '', recoveryCode = '') => {
+    const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password, code, recovery_code: recoveryCode }) })
     const data = await response.json()
-    if (!response.ok) throw new Error(data.detail || '管理登录失败')
+    if (!response.ok) { await refresh(); throw new Error(data.detail || '管理登录失败') }
     await refresh()
   }
   const logout = async () => {

@@ -6,4 +6,5 @@ openai
 python-dotenv
 httpx
 qrcode
+pyotp==2.9.0
 pypdf==6.20.0

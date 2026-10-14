@@ -22,7 +22,7 @@ from protect_local_secrets import protect
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "outputs" / "cloud-admin-20261013"
 CONTENT = ("uppers", "videos", "dynamics", "summaries", "finance_sources", "finance_claims", "finance_attempts", "finance_runs", "finance_evidence", "finance_evidence_jobs")
-API_PRIVATE = ("cloud_settings", "cloud_state", "cloud_jobs", "cloud_owner_sessions", "cloud_login_windows", "cloud_login_challenges")
+API_PRIVATE = ("cloud_settings", "cloud_state", "cloud_jobs", "cloud_owner_sessions", "cloud_login_windows", "cloud_login_challenges", "cloud_owner_factors")
 WORKER_PRIVATE = ("cloud_settings", "cloud_state", "cloud_jobs")
 
 

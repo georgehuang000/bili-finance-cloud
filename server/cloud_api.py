@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 import config
 import db
 import cloud_runtime as cloud
+import owner_auth
 
 _PUBLIC = {"/api/uppers", "/api/summaries", "/api/research", "/api/status", "/api/health"}
 _AUTHOR = re.compile(r"^/api/uppers/(\d{3,})/(videos|dynamics)$")
@@ -15,6 +16,24 @@ _AUTHOR = re.compile(r"^/api/uppers/(\d{3,})/(videos|dynamics)$")
 
 class OwnerLogin(BaseModel):
     password: str = Field(min_length=1, max_length=512)
+    code: str = Field(default="", max_length=6)
+    recovery_code: str = Field(default="", max_length=35)
+
+
+class ConfirmFactor(BaseModel):
+    password: str = Field(min_length=1, max_length=512)
+    code: str = Field(min_length=6, max_length=6)
+
+
+def _failure(error):
+    status = 429 if error == owner_auth.LIMITED else 503 if error == owner_auth.UNAVAILABLE else 401
+    return JSONResponse({"detail": error}, status_code=status)
+
+
+def _logged_in(token):
+    response = JSONResponse({"ok": True, "can_manage": True})
+    response.set_cookie(cloud.COOKIE, token, max_age=8 * 3600, httponly=True, secure=True, samesite="strict", path="/")
+    return response
 
 
 def configure(app):
@@ -24,18 +43,31 @@ def configure(app):
 
     @app.get("/api/auth/session")
     def session(request: Request):
-        return {"cloud": config.CLOUD_MODE, "can_manage": not config.CLOUD_MODE or cloud.is_owner(request), "test_mode": config.CLOUD_TEST_MODE if config.CLOUD_MODE else False}
+        factor = owner_auth.status() if config.CLOUD_MODE and cloud.ready() else {"mfa_enabled": False}
+        return {"cloud": config.CLOUD_MODE, "can_manage": not config.CLOUD_MODE or cloud.is_owner(request), "test_mode": config.CLOUD_TEST_MODE if config.CLOUD_MODE else False, **factor}
 
     @app.post("/api/auth/login")
-    def login(payload: OwnerLogin):
+    def login(payload: OwnerLogin, request: Request):
         if not config.CLOUD_MODE or not config.ADMIN_PASSWORD_HASH:
             return JSONResponse({"detail": "云端管理登录尚未配置"}, status_code=503)
-        token, error = cloud.login(payload.password)
+        token, error = cloud.login(payload.password, request, payload.code, payload.recovery_code)
         if not token:
-            return JSONResponse({"detail": error}, status_code=401)
-        response = JSONResponse({"ok": True, "can_manage": True})
-        response.set_cookie(cloud.COOKIE, token, max_age=8 * 3600, httponly=True, secure=True, samesite="strict", path="/")
-        return response
+            return _failure(error)
+        return _logged_in(token)
+
+    @app.post("/api/auth/mfa/setup")
+    def setup_factor(payload: OwnerLogin, request: Request):
+        if not config.CLOUD_MODE:
+            return JSONResponse({"detail": "仅云端管理登录支持此设置"}, status_code=400)
+        result, error = owner_auth.begin_setup(payload.password, request, payload.code, payload.recovery_code)
+        return _failure(error) if error else result
+
+    @app.post("/api/auth/mfa/confirm")
+    def confirm_factor(payload: ConfirmFactor, request: Request):
+        if not config.CLOUD_MODE:
+            return JSONResponse({"detail": "仅云端管理登录支持此设置"}, status_code=400)
+        token, error = owner_auth.confirm_setup(payload.password, request, payload.code)
+        return _failure(error) if error else _logged_in(token)
 
     @app.post("/api/auth/logout")
     def logout(request: Request):

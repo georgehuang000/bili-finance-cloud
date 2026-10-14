@@ -43,6 +43,13 @@ class OwnerSession(db.Base):
     expires_ts = Column(Integer, nullable=False)
 
 
+class OwnerFactor(db.Base):
+    # Separate grants: the collection worker must never read or modify MFA.
+    __tablename__ = "cloud_owner_factors"
+    key = Column(String, primary_key=True)
+    encrypted = Column(Text, nullable=False)
+
+
 class LoginChallenge(db.Base):
     __tablename__ = "cloud_login_challenges"
     digest = Column(String, primary_key=True)
@@ -77,6 +84,7 @@ def ready():
         return False
     try:
         required = {"uppers", "videos", "dynamics", "summaries", "finance_sources", "finance_claims", "finance_attempts", "finance_runs", "finance_evidence", "finance_evidence_jobs", "cloud_settings", "cloud_state", "cloud_jobs", "cloud_owner_sessions", "cloud_login_windows", "cloud_login_challenges"}
+        required.add("cloud_owner_factors")
         return required.issubset(set(inspect(db.engine).get_table_names()))
     except Exception:
         return False
@@ -99,26 +107,9 @@ def _password_matches(password):
         return False
 
 
-def login(password):
-    now = int(time.time())
-    # Global persistent limit is shared by cold starts and cannot be evaded by
-    # supplying forged IP headers. Owner-only site: ten attempts per 15 min.
-    with db.session_scope() as session:
-        session.execute(db.upsert_insert(LoginWindow).values(key="owner", attempts=0, window_ts=now).on_conflict_do_nothing())
-        window = session.execute(select(LoginWindow).where(LoginWindow.key == "owner").with_for_update()).scalar_one()
-        if now - window.window_ts > 900:
-            window.attempts, window.window_ts = 0, now
-        if window.attempts >= 10:
-            return None, "尝试次数过多，请15分钟后重试"
-        window.attempts += 1
-        if not _password_matches(password):
-            return None, "管理密码不正确"
-        window.attempts = 0
-        # Keep the session table bounded, including old logged-out browsers.
-        session.query(OwnerSession).filter(OwnerSession.expires_ts < now).delete()
-        token = secrets.token_urlsafe(32)
-        session.add(OwnerSession(digest=hashlib.sha256(token.encode()).hexdigest(), expires_ts=now + 8 * 3600))
-    return token, None
+def login(password, request, code="", recovery_code=""):
+    from owner_auth import login as owner_login
+    return owner_login(password, request, code, recovery_code)
 
 
 def is_owner(request):

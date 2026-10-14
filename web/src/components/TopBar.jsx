@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { NavLink } from 'react-router-dom'
 import { getStatus, postCrawl, postSummarize, testLlm } from '../api'
 import LoginDialog from './LoginDialog'
+import OwnerSecurityDialog from './OwnerSecurityDialog'
 import { useToast } from './Toast'
 import { useAccess } from '../access'
 import { fmtFullTime } from '../utils'
@@ -59,10 +60,13 @@ function GearIcon() {
 
 /** 全局顶栏:导航 + 立即爬取/总结 + 30s 轮询状态指示 */
 export default function TopBar() {
-  const { canManage, cloud, testMode, login, logout } = useAccess()
+  const { canManage, cloud, testMode, mfaEnabled, login, logout } = useAccess()
   const readOnly = !canManage
   const [ownerOpen, setOwnerOpen] = useState(false)
   const [ownerPassword, setOwnerPassword] = useState('')
+  const [ownerCode, setOwnerCode] = useState('')
+  const [ownerRecovery, setOwnerRecovery] = useState(false)
+  const [securityOpen, setSecurityOpen] = useState(false)
   const [ownerError, setOwnerError] = useState('')
   const [ownerPending, setOwnerPending] = useState(false)
   const toast = useToast()
@@ -76,6 +80,8 @@ export default function TopBar() {
   const closeOwner = useCallback(() => {
     setOwnerOpen(false)
     setOwnerPassword('')
+    setOwnerCode('')
+    setOwnerRecovery(false)
     setOwnerError('')
   }, [])
 
@@ -165,6 +171,7 @@ export default function TopBar() {
             if (canManage) { await logout(); setLoginOpen(false) }
             else { setOwnerOpen(true); setOwnerError('') }
           }}>{canManage ? '退出管理' : '管理登录'}</button>}
+          {cloud && canManage && <button className="btn" onClick={() => setSecurityOpen(true)}>登录安全{mfaEnabled ? ' · 已启用' : ''}</button>}
           {cloud && testMode && canManage && <span className="status-chip">手动测试</span>}
           {readOnly ? (
             <span className="status-chip" title={status?.published_ts ? `公网页面更新于 ${fmtFullTime(status.published_ts)}` : '查看已发布内容'}><span className="dot" /><span>公开只读</span></span>
@@ -237,10 +244,11 @@ export default function TopBar() {
         <div className="modal-head"><h3 id="owner-title" className="modal-title">管理登录</h3><button className="modal-close" aria-label="关闭" onClick={closeOwner}>×</button></div>
         <form className="modal-body" onSubmit={async e => {
           e.preventDefault(); setOwnerPending(true); setOwnerError('')
-          try { await login(ownerPassword); setOwnerPassword(''); setOwnerOpen(false); poll() }
+          try { await login(ownerPassword, ownerRecovery ? '' : ownerCode, ownerRecovery ? ownerCode : ''); closeOwner(); poll() }
           catch (error) { setOwnerError(error.message) }
           finally { setOwnerPending(false) }
         }}><label htmlFor="owner-password">管理密码</label><input id="owner-password" type="password" autoComplete="current-password" autoFocus required value={ownerPassword} onChange={e => setOwnerPassword(e.target.value)} style={{ width: '100%', margin: '12px 0', padding: 12 }}/>
+          {mfaEnabled && <><label htmlFor="owner-code">{ownerRecovery ? '一次性恢复码' : '验证器六位动态码'}</label><input id="owner-code" required inputMode={ownerRecovery ? 'text' : 'numeric'} autoComplete={ownerRecovery ? 'off' : 'one-time-code'} value={ownerCode} onChange={e => setOwnerCode(e.target.value.trim())} style={{ width: '100%', margin: '12px 0', padding: 12 }}/><button type="button" className="btn" onClick={() => { setOwnerRecovery(!ownerRecovery); setOwnerCode('') }}>{ownerRecovery ? '使用动态码' : '手机不可用，使用恢复码'}</button></>}
           {ownerError && <p role="alert">{ownerError}</p>}<button className="btn primary" disabled={ownerPending}>{ownerPending ? '登录中…' : '登录'}</button>
         </form></section></div>, document.body)}
       {!readOnly && <LoginDialog
@@ -248,6 +256,7 @@ export default function TopBar() {
         onClose={() => setLoginOpen(false)}
         onLoggedIn={onBiliLoggedIn}
       />}
+      {cloud && !readOnly && <OwnerSecurityDialog open={securityOpen} onClose={() => setSecurityOpen(false)} />}
     </header>
   )
 }
