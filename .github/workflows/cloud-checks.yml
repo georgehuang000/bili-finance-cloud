@@ -43,6 +43,8 @@ jobs:
         run: python -m unittest discover -s server -p test_report_schedule.py -v
       - name: Check official model provider boundaries
         run: python -m unittest discover -s server -p test_llm_provider.py -v
+      - name: Check initial history collection and checkpoint recovery
+        run: python -m unittest discover -s server -p test_history_crawler.py -v
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'

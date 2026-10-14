@@ -73,8 +73,8 @@ export function getStatus() {
 }
 
 /** POST /api/crawl */
-export function postCrawl(uid) {
-  return request('/api/crawl', { method: 'POST', body: JSON.stringify({ uid: uid || null }) })
+export function postCrawl(uid, fullHistory = false) {
+  return request('/api/crawl', { method: 'POST', body: JSON.stringify({ uid: uid || null, full_history: fullHistory }) })
 }
 
 /** POST /api/summarize */

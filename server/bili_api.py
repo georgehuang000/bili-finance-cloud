@@ -363,6 +363,23 @@ def _strip_dyn_type(dtype: str) -> str:
     return dtype[len("DYNAMIC_TYPE_"):] if (dtype or "").startswith("DYNAMIC_TYPE_") else dtype
 
 
+async def fetch_space_feed_page(uid: str, offset: str = "") -> dict:
+    """Fetch one cursor page; callers decide recent refresh vs history traversal."""
+    await _ensure_cookies()
+    params = {"host_mid": str(uid), "offset": offset, "platform": "web",
+              "features": "itemOpusStyle"}
+    data = await _api_get(FEED_URL, params)
+    if not offset or data.get("has_more"):
+        for attempt, base in enumerate(_EMPTY_BACKOFF):
+            if data.get("items"):
+                break
+            _count_risk("feed:empty_payload")
+            logger.warning("[bili_api] feed uid=%s: empty payload, retry %s", uid, attempt + 1)
+            await asyncio.sleep(random.uniform(base * 0.7, base * 1.3))
+            data = await _api_get(FEED_URL, params)
+    return data
+
+
 async def fetch_space_feed(uid: str, pages: int = 2) -> List[dict]:
     """拉取 UP主空间动态 feed（带 offset 翻页），返回原始 items。
 
@@ -370,43 +387,58 @@ async def fetch_space_feed(uid: str, pages: int = 2) -> List[dict]:
     返回 HTTP 200 + code=0 + items=[]（B站用空包做软限流），故按
     _EMPTY_BACKOFF 退避重试，避免把「限流空包」静默当成「该 UP 主没内容」。
     """
-    client = await _get_client()
-    await _ensure_cookies()
-
     items: List[dict] = []
     offset = ""
+    seen_offsets = {offset}
     for page in range(pages):
-        params = {
-            "host_mid": uid,
-            "offset": offset,
-            "platform": "web",
-            "features": "itemOpusStyle",
-        }
-        data = await _api_get(FEED_URL, params)
+        data = await fetch_space_feed_page(uid, offset)
         batch = data.get("items") or []
-
-        if page == 0:
-            for attempt, base in enumerate(_EMPTY_BACKOFF):
-                if batch:
-                    break
-                wait = random.uniform(base * 0.7, base * 1.3)
-                _count_risk("feed:empty_payload")
-                logger.warning(
-                    f"[bili_api] feed uid={uid}: empty payload (soft throttle?) "
-                    f"-> retry {attempt + 1}/{len(_EMPTY_BACKOFF)} after {wait:.0f}s"
-                )
-                await asyncio.sleep(wait)
-                data = await _api_get(FEED_URL, params)
-                batch = data.get("items") or []
-
         items.extend(batch)
         if not data.get("has_more"):
             break
         offset = data.get("offset") or ""
-        if not offset:
+        if not offset or offset in seen_offsets:
             break
+        seen_offsets.add(offset)
         await asyncio.sleep(random.uniform(1.5, 3.0))
     return items
+
+
+ARCHIVES_URL = "https://api.bilibili.com/x/v2/medialist/resource/list"
+
+
+async def fetch_archive_page(uid: str, oid: str = "") -> dict:
+    """Official creator playlist; include verified collaborations, never recommendations."""
+    data = await _api_get(ARCHIVES_URL, {
+        "type": 1, "biz_id": str(uid), "oid": oid, "otype": 2, "ps": 30,
+        "direction": "false", "with_current": 0, "mobi_app": "web", "tid": 0,
+    })
+    if not all(key in data for key in ("media_list", "has_more", "total_count")):
+        raise ValueError("archive_invalid_payload")
+    items = data.get("media_list") or []
+    rows = []
+    for item in items:
+        aid = str(item.get("id") or "")
+        if not aid:
+            raise ValueError("archive_missing_id")
+        if str((item.get("upper") or {}).get("mid")) != str(uid):
+            await asyncio.sleep(random.uniform(1.5, 3.0))
+            detail = await _api_get("https://api.bilibili.com/x/web-interface/view", {"aid": aid})
+            members = [detail.get("owner") or {}, *(detail.get("staff") or [])]
+            if not any(str(member.get("mid")) == str(uid) for member in members):
+                raise ValueError("archive_author_mismatch")
+        bvid = item.get("bv_id") or "av" + aid
+        cover = item.get("cover") or ""
+        if cover.startswith("http://"):
+            cover = "https://" + cover[7:]
+        rows.append({"bvid": "av" + aid, "uid": str(uid), "title": item.get("title") or "",
+                     "cover": cover, "desc": item.get("intro") or "",
+                     "pub_ts": int(item.get("pubtime") or 0),
+                     "play": int((item.get("cnt_info") or {}).get("play") or 0),
+                     "url": "https://www.bilibili.com/video/" + bvid})
+    return {"rows": rows, "has_more": bool(data.get("has_more")),
+            "next_oid": str(items[-1].get("id") or "") if items else "",
+            "total": int(data.get("total_count") or 0)}
 
 
 def _feed_video_row(item: dict, uid: str) -> Optional[dict]:

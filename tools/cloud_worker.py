@@ -25,7 +25,7 @@ def execute(job):
     kind, uid, payload = job["kind"], job["uid"], job["payload"]
     if kind in ("crawl", "scheduled"):
         if uid:
-            result = crawler_runner.crawl_single(uid)
+            result = crawler_runner.crawl_single(uid, full_history=bool(payload.get("full_history")))
             combined = result.get("detail", {}).get("combined", {})
             if not result.get("ok") or combined.get("error"):
                 raise ValueError("B站采集未成功，请检查扫码登录状态或云端出口风控")
@@ -51,6 +51,10 @@ def execute(job):
         evidence.verify(payload["claim_id"], payload["url"])
     else:
         raise ValueError("不支持的云端任务")
+    if kind in ("crawl", "scheduled"):
+        return [author for author in ([str(uid)] if uid else db.subscribed_uids())
+                if crawler_runner.STATE["uppers"].get(author, {}).get("history", {}).get("status") == "pending"]
+    return []
 
 
 def main():
@@ -85,7 +89,7 @@ def main():
         if not job:
             break
         try:
-            execute(job)
+            continuation = execute(job)
         except Exception as error:
             failures += 1
             # SDK/driver exception bodies can contain keys and connection URLs.
@@ -93,7 +97,9 @@ def main():
             cloud.finish_job(job["id"], message, failed=True)
             print(f"job={job['id']} kind={job['kind']} failed ({type(error).__name__})")
         else:
-            cloud.finish_job(job["id"])
+            cloud.finish_job(job["id"], "本批历史采集完成，继续补齐" if continuation else "执行完成")
+            for uid in continuation:
+                cloud.enqueue("crawl", uid)
             print(f"job={job['id']} kind={job['kind']} complete")
         finally:
             crawler_runner._save_state()

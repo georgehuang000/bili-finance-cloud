@@ -97,10 +97,13 @@ def get_uppers(request: Request):
             value = state.get("uppers", {}).get(row["uid"], {})
             row["last_crawl_ts"] = value.get("last_crawl_ts")
             row["last_error"] = value.get("last_error") if request.state.owner else None
+            row["history_status"] = value.get("history", {}).get("status")
+            row["history_video_total"] = value.get("history", {}).get("video_total")
         return rows
     for r in rows:
         r["last_crawl_ts"] = crawler_runner.last_crawl_ts(r["uid"])
         r["last_error"] = crawler_runner.last_error(r["uid"])
+        r["history_status"] = crawler_runner.STATE["uppers"].get(r["uid"], {}).get("history", {}).get("status")
     return rows
 
 
@@ -142,7 +145,7 @@ def search_uppers(q: str = Query(..., min_length=1, max_length=50)):
 
 @app.post("/api/uppers")
 def add_upper(req: AddUpperReq):
-    """加入订阅。成功后立即在后台抓取该 UP 主一轮，让首页卡片尽快有数据。"""
+    """加入订阅后补齐可访问的历史内容，完成后切换增量采集。"""
     uid = req.uid.strip()
     if not _UID_RE.match(uid):
         raise HTTPException(status_code=400, detail="UID 必须是纯数字")
@@ -171,13 +174,13 @@ def add_upper(req: AddUpperReq):
     if config.CLOUD_MODE:
         if config.CLOUD_TEST_MODE:
             return {"ok": True, "already": False, "message": f"已订阅 {name}；测试模式请手动采集"}
-        return cloud.enqueue("crawl", uid)
+        return cloud.enqueue("crawl", uid, {"full_history": True})
 
     # 登录态失效时后台抓取会被跳过，提示语要说实话，别让用户以为已经在抓了
     login_ok = not crawler_runner.STATE.get("login_required", False)
     crawl_started = crawler_runner.start_single_bg(uid)
     if crawl_started and login_ok:
-        msg = f"已订阅 {name}，正在后台抓取其最新内容"
+        msg = f"已订阅 {name}，正在后台补齐其历史内容"
     elif crawl_started:
         msg = f"已订阅 {name}，但B站登录态已失效、暂未抓取内容，请先在顶栏「扫码登录」"
     else:
@@ -314,15 +317,28 @@ def get_diagnostics():
     return diagnostics.snapshot()
 
 
+class CrawlReq(BaseModel):
+    model_config = {"extra": "forbid"}
+    uid: str | None = Field(default=None, pattern=r"^\d{3,}$")
+    full_history: bool = Field(default=False, strict=True)
+
+
 @app.post("/api/crawl")
-def post_crawl(req: AnalyzeReq | None = None):
+def post_crawl(req: CrawlReq | None = None):
+    if req and req.full_history and not req.uid:
+        raise HTTPException(400, "请指定一位UP主补齐历史内容")
     if config.CLOUD_MODE:
         uid = req.uid if req else None
         if config.CLOUD_TEST_MODE and not uid:
             raise HTTPException(400, "测试阶段请在观点研究中选择一位UP主后采集")
         if uid and uid not in db.subscribed_uids():
             raise HTTPException(404, "该UP主未订阅")
-        return cloud.enqueue("crawl", uid)
+        return cloud.enqueue("crawl", uid, {"full_history": True} if req and req.full_history else {})
+    if req and req.uid:
+        if req.full_history:
+            crawler_runner.STATE["uppers"].setdefault(req.uid, {})["history"] = {"status": "pending"}
+            crawler_runner._save_state()
+        return {"ok": crawler_runner.start_single_bg(req.uid), "message": "已提交该UP主采集"}
     if not crawler_runner.start_full_round_bg():
         return {"ok": False, "message": "已在爬取中，请稍后再试"}
     return {"ok": True, "message": "已启动后台爬取任务"}

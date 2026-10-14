@@ -68,6 +68,20 @@ class CloudTests(unittest.TestCase):
         self.client.post("/api/auth/logout")
         self.assertEqual(self.client.post("/api/crawl").status_code, 401)
 
+    def test_new_subscription_queues_history_and_only_owner_can_backfill(self):
+        self.assertEqual(self.client.post("/api/crawl", json={"uid": "1000", "full_history": True}).status_code, 401)
+        self.owner()
+        with patch.object(config, "CLOUD_TEST_MODE", False), patch("bili_api.fetch_user_card", new=AsyncMock(return_value={"name": "新作者"})):
+            self.assertEqual(self.client.post("/api/uppers", json={"uid": "2000", "name": "新作者"}).status_code, 200)
+        job = cloud.take_job()
+        self.assertEqual(job["uid"], "2000")
+        self.assertEqual(job["payload"], {"full_history": True})
+        self.assertEqual(self.client.post("/api/crawl", json={"full_history": True}).status_code, 400)
+        self.assertEqual(self.client.post("/api/crawl", json={"uid": "1000", "full_history": "true"}).status_code, 422)
+        self.assertEqual(self.client.post("/api/crawl", json={"uid": "1000", "full_history": True}).status_code, 200)
+        job = cloud.take_job()
+        self.assertEqual(job["payload"], {"full_history": True})
+
     def test_persistent_login_limits_do_not_lock_another_source(self):
         with patch.dict(os.environ, {"VERCEL": "1", "VERCEL_ENV": "production"}):
             attacker = {"x-vercel-forwarded-for": "192.0.2.10"}

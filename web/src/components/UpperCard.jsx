@@ -80,6 +80,11 @@ export default function UpperCard({ upper, index = 0, onChanged }) {
           </span>
         </div>
         <div className="upper-crawl">{readOnly ? '最近更新' : '上次爬取'} · {fmtAgo(upper.last_crawl_ts)}</div>
+        {upper.history_status && (
+          <div className="upper-crawl">
+            {upper.history_status === 'complete' ? '历史采集完成' : upper.history_status === 'error' ? '历史补齐待重试' : '历史内容补齐中'}
+          </div>
+        )}
         {!readOnly && crawlIssue && (
           <div className="upper-error" title={crawlIssue.detail}>
             <WarnIcon />

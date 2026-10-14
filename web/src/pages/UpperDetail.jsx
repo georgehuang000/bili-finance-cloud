@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { getDynamics, getUppers, getVideos } from '../api'
+import { getDynamics, getUppers, getVideos, postCrawl } from '../api'
+import { useAccess } from '../access'
+import { useToast } from '../components/Toast'
 import { fmtAgo } from '../utils'
 import VideoList from '../components/VideoList'
 import DynamicList from '../components/DynamicList'
@@ -10,6 +12,9 @@ const PAGE = 30
 /** UP 主详情页:Tab 切换 视频/动态,支持加载更多 */
 export default function UpperDetail() {
   const { uid } = useParams()
+  const { canManage } = useAccess()
+  const toast = useToast()
+  const [backfilling, setBackfilling] = useState(false)
   const [upper, setUpper] = useState(null)
   const [tab, setTab] = useState('videos')
 
@@ -91,6 +96,17 @@ export default function UpperDetail() {
             {upper?.last_crawl_ts ? ` · 上次爬取 ${fmtAgo(upper.last_crawl_ts)}` : ''}
           </div>
           <Link className="research-source" to={`/research?uid=${encodeURIComponent(uid)}`}>查看该UP主的自动观点分析 →</Link>
+          {canManage && <button className="btn" disabled={backfilling} onClick={async () => {
+            setBackfilling(true)
+            try {
+              const result = await postCrawl(uid, true)
+              toast(result.message || '已提交历史补齐任务')
+            } catch (error) {
+              toast(error.message, 'error')
+            } finally {
+              setBackfilling(false)
+            }
+          }}>{backfilling ? '提交中…' : '补齐历史内容'}</button>}
         </div>
       </div>
 

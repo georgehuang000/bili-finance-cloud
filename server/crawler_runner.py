@@ -559,7 +559,7 @@ def _end_crawl():
         logger.warning("finance analysis trigger failed: %s", type(ex).__name__)
 
 
-def _run_pure_api(uid: str) -> dict:
+def _run_pure_api(uid: str, full_history: bool = False) -> dict:
     """Run pure API crawl for one UID (videos + dynamics in one call).
 
     Returns dict compatible with the old _run_one shape:
@@ -569,6 +569,17 @@ def _run_pure_api(uid: str) -> dict:
     video_count = 0
     dyn_count = 0
     try:
+        author = STATE["uppers"].setdefault(str(uid), {})
+        history = author.get("history")
+        needs_history = (full_history or (history and history.get("status") != "complete")
+                         or (history is None and not bili_api._has_history(str(uid))))
+        if needs_history:
+            import history_crawler
+            if history is None or history.get("status") == "complete":
+                author["history"] = {}
+            result = loop.run_until_complete(history_crawler.crawl(
+                str(uid), author["history"], _save_state))
+            return result
         result = loop.run_until_complete(bili_api.crawl_one_uid(str(uid)))
 
         # Upsert into db
@@ -638,7 +649,7 @@ def _run_pure_api(uid: str) -> dict:
     }
 
 
-def crawl_single(uid: str, do_videos: bool = True, do_dynamics: bool = True):
+def crawl_single(uid: str, do_videos: bool = True, do_dynamics: bool = True, full_history: bool = False):
     """Crawl a single UID (used for verification / targeted refresh)."""
     if not _try_begin_crawl():
         return {"ok": False, "message": "already crawling"}
@@ -650,7 +661,7 @@ def crawl_single(uid: str, do_videos: bool = True, do_dynamics: bool = True):
                 # 记下原因，好让卡片上显示「登录态失效」而不是一片空白
                 _set_upper_state(uid, last_error="login_required")
                 return {"ok": False, "message": "login_required"}
-            r = _run_pure_api(uid)
+            r = _run_pure_api(uid, full_history=full_history)
             _set_upper_state(
                 uid,
                 last_crawl_ts=int(time.time()),
