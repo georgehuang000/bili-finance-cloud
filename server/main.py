@@ -335,10 +335,8 @@ def post_crawl(req: CrawlReq | None = None):
             raise HTTPException(404, "该UP主未订阅")
         return cloud.enqueue("crawl", uid, {"full_history": True} if req and req.full_history else {})
     if req and req.uid:
-        if req.full_history:
-            crawler_runner.STATE["uppers"].setdefault(req.uid, {})["history"] = {"status": "pending"}
-            crawler_runner._save_state()
-        return {"ok": crawler_runner.start_single_bg(req.uid), "message": "已提交该UP主采集"}
+        return {"ok": crawler_runner.start_single_bg(req.uid, full_history=req.full_history),
+                "message": "已提交该UP主采集"}
     if not crawler_runner.start_full_round_bg():
         return {"ok": False, "message": "已在爬取中，请稍后再试"}
     return {"ok": True, "message": "已启动后台爬取任务"}

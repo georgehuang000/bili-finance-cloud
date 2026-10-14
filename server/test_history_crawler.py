@@ -59,6 +59,7 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(self.saved[-1]["status"], "complete")
 
     def test_batch_boundary_resumes_at_committed_cursor(self):
+        self.progress["videos_done"] = True
         with patch.object(bili_api, "fetch_space_feed_page", new=AsyncMock(side_effect=[
                 feed("d1", True, "a"), feed("d2", True, "b")])):
             self.assertTrue(self.run_history(budget=2)["history_pending"])
@@ -70,6 +71,7 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(self.progress["status"], "complete")
 
     def test_failed_page_keeps_progress_and_retry_does_not_skip_it(self):
+        self.progress["videos_done"] = True
         with patch.object(bili_api, "fetch_space_feed_page", new=AsyncMock(side_effect=[
                 feed("d1", True, "a"), RuntimeError("synthetic-private-request-detail")])):
             with self.assertRaises(RuntimeError):
@@ -83,6 +85,7 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(self.dynamic_ids, {"d1", "d2"})
 
     def test_repeated_offset_does_not_falsely_finish(self):
+        self.progress["videos_done"] = True
         with patch.object(bili_api, "fetch_space_feed_page", new=AsyncMock(side_effect=[
                 feed("d1", True, "a"), feed("d2", True, "a")])):
             with self.assertRaisesRegex(ValueError, "no_progress"):
@@ -148,6 +151,23 @@ class HistoryTests(unittest.TestCase):
             runner._run_pure_api("1000")
         recent.assert_awaited_once_with("1000")
         backfill.assert_not_awaited()
+
+    def test_local_request_during_active_crawl_cannot_reset_its_checkpoint(self):
+        import main
+        progress = {"status": "pending", "feed_offset": "already-committed"}
+        with patch.object(main.config, "CLOUD_MODE", False), \
+             patch.dict(runner.STATE, {"crawling": True, "uppers": {"1000": {"history": progress}}}):
+            result = main.post_crawl(main.CrawlReq(uid="1000", full_history=True))
+            self.assertFalse(result["ok"])
+            self.assertEqual(runner.STATE["uppers"]["1000"]["history"], progress)
+
+    def test_video_only_author_can_have_no_dynamics(self):
+        with patch.object(bili_api, "fetch_archive_page", new=AsyncMock(return_value=archive("v1"))), \
+             patch.object(bili_api, "fetch_space_feed_page", new=AsyncMock(return_value={"items": [], "has_more": False})), \
+             patch.object(history.db, "list_dynamics", return_value=[]):
+            self.assertFalse(self.run_history()["history_pending"])
+        self.assertEqual(self.video_ids, {"v1"})
+        self.assertEqual(self.progress["status"], "complete")
 
 
 if __name__ == "__main__":

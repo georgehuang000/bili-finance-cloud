@@ -24,7 +24,7 @@ async def crawl(uid, progress, checkpoint, *, page_budget=PAGES_PER_BATCH):
     seen_video = {progress.get("video_oid", "")}
     try:
         for _ in range(page_budget):
-            if not progress.get("feed_done"):
+            if not progress.get("feed_done") and progress.get("videos_done"):
                 offset = progress.get("feed_offset", "")
                 data = await bili_api.fetch_space_feed_page(uid, offset)
                 if "has_more" not in data:
@@ -34,7 +34,7 @@ async def crawl(uid, progress, checkpoint, *, page_budget=PAGES_PER_BATCH):
                 next_offset = str(data.get("offset") or "")
                 if more and (not items or not next_offset or next_offset in seen_feed):
                     raise ValueError("history_feed_no_progress")
-                if not items and not offset and bili_api._has_history(uid):
+                if not items and not offset and db.list_dynamics(uid, limit=1):
                     raise ValueError("empty_feed(soft_throttle)")
                 dyn_rows, vid_rows = bili_api._parse_feed(items, uid)
                 videos += db.upsert_videos(vid_rows)

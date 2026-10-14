@@ -904,7 +904,7 @@ def start_full_round_bg() -> bool:
     return True
 
 
-def start_single_bg(uid: str) -> bool:
+def start_single_bg(uid: str, full_history: bool = False) -> bool:
     """Start a background crawl of a single UID (e.g. right after subscribing).
 
     crawl_single 自带互斥申请；正在全量爬取时返回 False（本轮跳过，
@@ -915,7 +915,7 @@ def start_single_bg(uid: str) -> bool:
 
     def _worker():
         try:
-            crawl_single(str(uid))
+            crawl_single(str(uid), full_history=full_history)
         except Exception as ex:
             logger.error("[crawler] single crawl uid=%s failed: %s", uid, ex)
 
