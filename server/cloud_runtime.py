@@ -16,6 +16,7 @@ from sqlalchemy import inspect
 
 import config
 import db
+from report_schedule import report_date
 
 COOKIE = "__Host-bili_owner"
 SECRET_KEYS = {
@@ -304,6 +305,31 @@ def enqueue(kind, uid=None, payload=None):
         session.add(job)
         session.flush()
         return {"ok": True, "job_id": job.id, "message": "已加入云端队列，等待执行"}
+
+
+def enqueue_scheduled(period):
+    if period not in ("morning", "evening"):
+        raise ValueError("定时日报必须为早报或晚报")
+    date = report_date()
+    with db.session_scope() as session:
+        from sqlalchemy import text
+        session.execute(text("SELECT pg_advisory_xact_lock(82001432)"))
+        report = session.execute(select(db.Summary.id).where(
+            db.Summary.date == date, db.Summary.period == period).limit(1)).scalar()
+        if report is not None:
+            return {"ok": False, "job_id": None, "message": "本期日报已生成，跳过重复任务"}
+        jobs = session.execute(select(Job).where(
+            Job.kind == "scheduled", Job.status.in_(["queued", "running", "complete"]))).scalars()
+        for existing in jobs:
+            payload = json.loads(existing.payload)
+            if payload.get("date") == date and payload.get("period") == period:
+                return {"ok": False, "job_id": existing.id, "message": "本期日报已提交，跳过重复任务"}
+        job = Job(kind="scheduled", uid=None,
+                  payload=json.dumps({"date": date, "period": period}),
+                  status="queued", created_ts=int(time.time()))
+        session.add(job)
+        session.flush()
+        return {"ok": True, "job_id": job.id, "message": "已提交定时采集与日报任务"}
 
 
 def take_job():

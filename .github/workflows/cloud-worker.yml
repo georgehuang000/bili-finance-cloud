@@ -2,7 +2,9 @@ name: Cloud collection and analysis
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0,10 * * *'
+    # UTC 00:00 / 10:00 = Beijing 08:00 / 18:00.
+    - cron: '0 0 * * *'
+    - cron: '0 10 * * *'
     - cron: '7,22,37,52 * * * *'
 permissions:
   contents: read
@@ -51,6 +53,9 @@ jobs:
       - name: Check public site during manual validation
         if: github.event_name == 'workflow_dispatch' && env.DATABASE_URL != ''
         run: python tools/check_cloud_site.py
-      - name: Execute scheduled collection
-        if: env.DATABASE_URL != '' && github.event.schedule == '0 0,10 * * *'
-        run: python tools/cloud_worker.py --scheduled
+      - name: Collect and generate morning report
+        if: env.DATABASE_URL != '' && github.event.schedule == '0 0 * * *'
+        run: python tools/cloud_worker.py --scheduled --period morning
+      - name: Collect and generate evening report
+        if: env.DATABASE_URL != '' && github.event.schedule == '0 10 * * *'
+        run: python tools/cloud_worker.py --scheduled --period evening

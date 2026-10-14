@@ -11,12 +11,12 @@
 """
 import threading
 import time
-from datetime import datetime
 
 import config
 import db
 import crawler_runner
 import llm_client
+from report_schedule import report_date
 
 # independent mutex for summarization (separate from the crawl lock)
 _summarize_lock = threading.Lock()
@@ -197,7 +197,7 @@ def summarize_video(title: str, desc: str, subtitle_text: str) -> str:
     return content.strip()
 
 
-def generate(period: str = "manual"):
+def generate(period: str = "manual", date=None):
     """Generate and persist a report. period in {morning, evening, manual}.
 
     NOTE: does NOT manage the summarizing mutex itself; callers must go through
@@ -210,7 +210,7 @@ def generate(period: str = "manual"):
         if not has_any:
             user += "\n\n注意：近24小时暂无新增素材，请生成一份说明当前无新增内容的简短日报。"
         content, model = _call_llm(system, user)
-        date = datetime.now().strftime("%Y-%m-%d")
+        date = date or report_date()
         sid = db.insert_summary(date=date, period=period, content=content, model=model)
         return {"ok": True, "id": sid, "model": model, "date": date}
     except Exception as ex:
@@ -232,13 +232,13 @@ def _end_summarize():
         crawler_runner.STATE["summarizing"] = False
 
 
-def generate_sync(period: str = "manual") -> bool:
+def generate_sync(period: str = "manual", date=None) -> bool:
     """Guarded synchronous generation (used by the scheduler).
     Returns False without doing anything if a summarization is already running."""
     if not _try_begin_summarize():
         return False
     try:
-        generate(period=period)
+        generate(period=period, date=date)
     finally:
         _end_summarize()
     return True

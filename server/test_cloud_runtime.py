@@ -215,6 +215,21 @@ class CloudTests(unittest.TestCase):
         with analysis.connect() as connection:
             self.assertIsNone(connection.execute("SELECT * FROM finance_attempts WHERE input_hash=?", ("rollback",)).fetchone())
 
+    def test_scheduled_reports_deduplicate_each_beijing_date_and_period(self):
+        with patch.object(cloud, "report_date", return_value="2026-10-14"):
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results = list(pool.map(lambda _: cloud.enqueue_scheduled("morning"), range(4)))
+            self.assertEqual(sum(r["ok"] for r in results), 1)
+            job = cloud.take_job()
+            self.assertEqual(job["payload"], {"date": "2026-10-14", "period": "morning"})
+            cloud.finish_job(job["id"], failed=True)
+            self.assertTrue(cloud.enqueue_scheduled("morning")["ok"])
+            db.insert_summary(date="2026-10-14", period="morning", content="fixture", model="fixture")
+            self.assertFalse(cloud.enqueue_scheduled("morning")["ok"])
+            self.assertTrue(cloud.enqueue_scheduled("evening")["ok"])
+        with patch.object(cloud, "report_date", return_value="2026-10-15"):
+            self.assertTrue(cloud.enqueue_scheduled("morning")["ok"])
+
     def test_queue_deduplicates_parallel_calls_and_cold_start_preserves_running(self):
         with ThreadPoolExecutor(max_workers=4) as pool:
             results = list(pool.map(lambda _: cloud.enqueue("analyze", "1000", {"per_upper": 1}), range(4)))

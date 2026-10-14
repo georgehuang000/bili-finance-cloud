@@ -31,11 +31,15 @@ def execute(job):
             if not result.get("ok") or combined.get("error"):
                 raise ValueError("B站采集未成功，请检查扫码登录状态或云端出口风控")
         else:
-            crawler_runner.run_full_round_sync()
-            if crawler_runner.STATE.get("login_required") or any(value.get("last_error") for value in crawler_runner.STATE["uppers"].values()):
+            if not crawler_runner.run_full_round_sync():
+                raise ValueError("已有采集任务运行中，本轮未执行")
+            if crawler_runner.STATE.get("login_required") or any(
+                    crawler_runner.STATE["uppers"].get(author, {}).get("last_error")
+                    for author in db.subscribed_uids()):
                 raise ValueError("部分B站采集未成功，请检查登录和作者状态")
         if kind == "scheduled":
-            summarizer.generate_sync(payload.get("period", "cloud"))
+            if not summarizer.generate_sync(payload["period"], date=payload.get("date")):
+                raise ValueError("已有日报任务运行中，本轮未生成")
         if not config.CLOUD_TEST_MODE and config.FINANCE_AUTO_ANALYSIS:
             analysis.run_batch(uid, per_upper=4)
     elif kind == "analyze":
@@ -53,7 +57,10 @@ def execute(job):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--scheduled", action="store_true")
+    parser.add_argument("--period", choices=("morning", "evening"))
     args = parser.parse_args()
+    if args.scheduled and not args.period:
+        parser.error("--scheduled requires --period morning or evening")
     if not cloud.ready():
         print("DATABASE_URL 尚未配置；未运行任何收费任务")
         return
@@ -65,7 +72,8 @@ def main():
         if os.environ.get("CLOUD_SCHEDULE_ENABLED") != "true" or config.CLOUD_TEST_MODE:
             print("测试阶段定时采集关闭")
         else:
-            cloud.enqueue("scheduled", payload={"period": "cloud"})
+            result = cloud.enqueue_scheduled(args.period)
+            print(result["message"])
     failures = 0
     for _ in range(5):
         job = cloud.take_job()
