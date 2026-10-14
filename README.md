@@ -263,9 +263,9 @@ sqlite3 server/data.db 'select count(*) from videos;'   # 数据量
 - **MediaCrawler 输出脱敏**：其输出中创作者标识为匿名 hash，无法从输出反查 UID，故本系统以**配置文件中的 UID 为主键**、每次子进程只跑一个 UID 来做归属。
 - 单 UID 单模式爬取超时 5 分钟，超时会强杀整棵进程树（含 Chrome 子进程）。
 - `server/tmp/` 下的中间 JSON 每轮爬取前自动清理 7 天以前的文件。
-# 云端测试版本
+# 云端部署
 
-公网权限、Vercel/PostgreSQL/GitHub Actions 接入流程与测试记录见 [docs/云端部署与测试记录.md](docs/云端部署与测试记录.md)。云端使用 DeepSeek 官方 API，初始只允许手动少量测试，自动采集保持关闭。原树莓派服务保留至全云链路验收完成。
+公网权限、Vercel/PostgreSQL/GitHub Actions 接入流程与测试记录见 [docs/云端部署与测试记录.md](docs/云端部署与测试记录.md)。云端使用 DeepSeek 官方 API。2026-10-14 起按用户要求每天北京时间08:00、18:00自动采集当前订阅作者，生成早报/晚报；任务实际完成后更新页面。逐条观点深度分析仍由管理员手动触发。原树莓派服务暂保留。
 
 Vercel Services 方案使用 `server`（`/api/*`）和 `web`（其余页面）。联合本地开发运行 `vercel dev -L`；单独开发 Vite 时设置 `LOCAL_API_URL=http://127.0.0.1:9000` 后运行 `npm run dev --prefix web`。此变量仅用于本地代理，生产浏览器始终请求同域 `/api`，不把内部 binding URL 注入客户端。
 

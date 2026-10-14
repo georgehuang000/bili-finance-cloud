@@ -29,12 +29,19 @@ def main():
         assert all(isinstance(author, dict) and isinstance(author.get("uid"), str)
                    and author["uid"].isdigit() and author.get("name") for author in authors)
         assert len({author["uid"] for author in authors}) == len(authors), "Duplicate author UID"
+        summaries = client.get("/api/summaries")
+        assert summaries.status_code == 200
+        reports = summaries.json()
+        assert isinstance(reports, list) and reports and reports[0].get("content"), "Latest report missing"
+        latest = reports[0]
+        dated = client.get("/api/summaries", params={"date": latest["date"]})
+        assert dated.status_code == 200 and any(report["id"] == latest["id"] for report in dated.json())
         for path in ("/api/uppers/search?q=fixture", "/api/llm/status", "/api/jobs", "/api/login/status"):
             assert client.get(path).status_code == 401, f"Private route exposed: {path}"
         for path in ("/api/crawl", "/api/uppers", "/api/llm/test", "/api/login/qrcode"):
             assert client.post(path, json={}).status_code == 401, f"Anonymous write exposed: {path}"
         assert client.get("/.env").status_code == 404
-        print(json.dumps({"public_pages": "passed", "api_database": "passed", "anonymous_management_denied": "passed", "authors": len(authors), "model_key_ui": "absent"}))
+        print(json.dumps({"public_pages": "passed", "api_database": "passed", "anonymous_management_denied": "passed", "authors": len(authors), "model_key_ui": "absent", "latest_report": {key: latest[key] for key in ("id", "date", "period")}}))
 
 
 if __name__ == "__main__":
