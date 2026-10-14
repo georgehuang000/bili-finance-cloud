@@ -1,9 +1,9 @@
 [Unit]
-Description=Check the Bili finance work queue every five minutes
+Description=Check the Bili finance work queue every fifteen minutes
 
 [Timer]
 OnBootSec=2min
-OnUnitInactiveSec=5min
+OnUnitInactiveSec=15min
 Unit=bili-finance-worker.service
 
 [Install]
