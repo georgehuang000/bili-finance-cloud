@@ -2,7 +2,7 @@
     default_sni 82.157.178.52
 }
 
-82.157.178.52 {
+82.157.178.52, https://82.157.178.52:10000 {
     tls {
         issuer acme {
             dir https://acme-v02.api.letsencrypt.org/directory

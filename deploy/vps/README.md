@@ -20,6 +20,9 @@ Caddy serves the built web/dist and terminates HTTPS; Uvicorn only listens on
   restricted API and worker URLs and encryption key, not the database owner URL.
 - The public-IP certificate uses Let's Encrypt's shortlived profile and Caddy
   renewal. Replace the site address/default_sni for a user-owned domain later.
+- The same protected site is also available over HTTPS on port 10000. Allow
+  TCP 10000 in the cloud firewall, and retain 80/443 for certificate validation.
+  Port 9000 remains loopback-only; frontend requests use same-origin /api.
 
 Operational checks: systemctl status bili-finance-api; systemctl list-timers
 'bili-finance-*'; journalctl -u bili-finance-worker --since today. Never print

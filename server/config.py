@@ -65,16 +65,25 @@ if CLOUD_MODE:
 #                 > deepseek_key（手动写在 .env 里的键名）
 # 两者都支持，先命中的生效。
 # The secret is read here but MUST NOT be printed/logged anywhere.
-LLM_API_KEY = (_get("DEEPSEEK_API_KEY") or _get("LLM_API_KEY")) if CLOUD_MODE else (_get("LLM_API_KEY") or _get("deepseek_key"))
+CLOUD_LLM_BASES = {
+    "deepseek": "https://api.deepseek.com/v1",
+    "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+}
+LLM_PROVIDER = _get("LLM_PROVIDER", "deepseek").lower()
+if CLOUD_MODE and LLM_PROVIDER not in CLOUD_LLM_BASES:
+    raise ValueError("云端分析服务仅支持已配置的官方服务商")
+provider_key = "DASHSCOPE_API_KEY" if LLM_PROVIDER == "dashscope" else "DEEPSEEK_API_KEY"
+LLM_API_KEY = (_get(provider_key) or _get("LLM_API_KEY")) if CLOUD_MODE else (_get("LLM_API_KEY") or _get("deepseek_key"))
 # 兼容别名：老代码/诊断里用的是这个名字
 SENSETIME_KEY = LLM_API_KEY
 
 LLM_BASE_URL = _get("LLM_BASE_URL", "https://api.deepseek.com/v1")
 if CLOUD_MODE:
-    LLM_BASE_URL = "https://api.deepseek.com/v1"
+    # Never accept a browser-supplied or arbitrary deployment destination.
+    LLM_BASE_URL = CLOUD_LLM_BASES[LLM_PROVIDER]
 # deepseek-flash = DeepSeek-V4.1-Flash：1M 上下文、384K 输出、支持图片识别、最便宜。
 # 注意 `deepseek-v4-flash` 是已退役的旧名（仍被接受，但由 V4.1-Flash 承接）。
-LLM_MODEL = _get("LLM_MODEL", "deepseek-flash")
+LLM_MODEL = _get("LLM_MODEL", "qwen3.8-max" if CLOUD_MODE and LLM_PROVIDER == "dashscope" else "deepseek-flash")
 # 不做兜底模型：只用上面这一个（LLM_MODEL_FALLBACK 已废弃；.env 里残留的该键会被忽略）
 # 图片识别用的模型。默认跟随 LLM_MODEL（在 DeepSeek 官方就是 deepseek-flash）。
 VISION_MODEL = _get("VISION_MODEL") or LLM_MODEL

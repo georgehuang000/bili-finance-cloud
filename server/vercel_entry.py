@@ -4,9 +4,7 @@ import os
 os.environ["CLOUD_MODE"] = "true"
 os.environ.setdefault("CLOUD_TEST_MODE", "true")
 os.environ.setdefault("CLOUD_API_ONLY", "true")
-os.environ.setdefault("LLM_BASE_URL", "https://api.deepseek.com/v1")
-os.environ.setdefault("LLM_MODEL", "deepseek-flash")
-os.environ.setdefault("VISION_MODEL", "deepseek-flash")
+# Model/base defaults are selected centrally by config's fixed provider map.
 os.environ.setdefault("LLM_THINKING", "disabled")
 os.environ.setdefault("FINANCE_AUTO_ANALYSIS", "false")
 

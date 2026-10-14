@@ -4,7 +4,6 @@ import os
 import sys
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
 
 os.environ["CLOUD_MODE"] = "true"
 os.environ["CLOUD_WORKER"] = "true"
@@ -21,8 +20,8 @@ import summarizer
 
 def execute(job):
     cloud.refresh_settings()
-    if urlsplit(config.LLM_BASE_URL).hostname != "api.deepseek.com":
-        raise ValueError("云端仅允许 DeepSeek 官方 API")
+    if config.LLM_BASE_URL != config.CLOUD_LLM_BASES.get(config.LLM_PROVIDER):
+        raise ValueError("云端分析服务地址不符合官方服务商配置")
     kind, uid, payload = job["kind"], job["uid"], job["payload"]
     if kind in ("crawl", "scheduled"):
         if uid:
