@@ -14,7 +14,7 @@ import cloud_runtime as cloud
 import db
 
 INVALID = "管理密码或验证代码不正确；已使用的动态码请等待下一组"
-LIMITED = "当前网络尝试次数过多，请15分钟后重试，或换一个网络登录"
+LIMITED = "当前网络尝试次数过多，请使用恢复码、换一个网络登录，或15分钟后重试"
 UNAVAILABLE = "无法确认登录请求来源，请稍后重试"
 
 
@@ -86,10 +86,9 @@ def _proof(data, code, recovery_code, now):
     if code and recovery_code:
         return False, False
     if recovery_code:
-        normalized = recovery_code.replace("-", "").lower()
-        if not re.fullmatch(r"[0-9a-f]{32}", normalized):
+        digest = _recovery_digest(recovery_code)
+        if not digest:
             return False, False
-        digest = hashlib.sha256(normalized.encode()).hexdigest()
         for stored in data.get("recovery", []):
             if secrets.compare_digest(stored, digest):
                 data["recovery"].remove(stored)
@@ -100,6 +99,11 @@ def _proof(data, code, recovery_code, now):
         return False, False
     data["last_step"] = step
     return True, False
+
+
+def _recovery_digest(code):
+    normalized = code.replace("-", "").lower()
+    return hashlib.sha256(normalized.encode()).hexdigest() if re.fullmatch(r"[0-9a-f]{32}", normalized) else None
 
 
 def _revoke(session):
@@ -121,7 +125,18 @@ def login(password, request, code="", recovery_code=""):
     with db.session_scope() as session:
         window = _window(session, key, now)
         if not window:
-            return None, LIMITED
+            # An unknown visitor cannot spend an owner's 128-bit recovery
+            # allowance. Check this cheap proof before the password hash;
+            # invalid/replayed codes never bypass the ordinary network cap.
+            digest = _recovery_digest(recovery_code)
+            if not digest or code:
+                return None, LIMITED
+            row, data = _factor(session)
+            if not data.get("secret") or not any(secrets.compare_digest(value, digest) for value in data.get("recovery", [])):
+                return None, LIMITED
+            window = _window(session, "recovery:" + digest, now)
+            if not window:
+                return None, LIMITED
         if not cloud._password_matches(password):
             return None, INVALID
         row, data = _factor(session)
@@ -147,7 +162,9 @@ def begin_setup(password, request, code="", recovery_code=""):
     if not key:
         return None, UNAVAILABLE
     with db.session_scope() as session:
-        window = _window(session, key, now)
+        # The middleware and transaction both require a live owner session;
+        # unrelated anonymous guesses cannot exhaust this step-up allowance.
+        window = _window(session, "owner:" + cloud._owner_digest(request), now)
         if not window:
             return None, LIMITED
         if not cloud._password_matches(password):
@@ -174,7 +191,7 @@ def confirm_setup(password, request, code):
     if not key:
         return None, UNAVAILABLE
     with db.session_scope() as session:
-        window = _window(session, key, now)
+        window = _window(session, "owner:" + cloud._owner_digest(request), now)
         if not window:
             return None, LIMITED
         if not cloud._password_matches(password):

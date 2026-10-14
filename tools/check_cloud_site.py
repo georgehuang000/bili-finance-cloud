@@ -21,9 +21,12 @@ def main():
         asset = client.get(script)
         assert asset.status_code == 200 and "javascript" in asset.headers.get("content-type", "")
         assert "/api/llm/settings" not in asset.text and "模型设置" not in asset.text
+        assert "登录安全" in asset.text and "/api/auth/mfa/" in asset.text
         health = client.get("/api/health")
         assert health.status_code == 200 and health.json()["ok"] and health.json()["cloud"]
-        assert client.get("/api/auth/session").json()["can_manage"] is False
+        session = client.get("/api/auth/session").json()
+        assert session["can_manage"] is False and isinstance(session.get("mfa_enabled"), bool)
+        assert not {"manual_key", "recovery_codes", "secret", "password"}.intersection(session)
         authors = client.get("/api/uppers").json()
         assert isinstance(authors, list) and authors, "Subscribed authors missing"
         assert all(isinstance(author, dict) and isinstance(author.get("uid"), str)
@@ -38,7 +41,7 @@ def main():
         assert dated.status_code == 200 and any(report["id"] == latest["id"] for report in dated.json())
         for path in ("/api/uppers/search?q=fixture", "/api/llm/status", "/api/jobs", "/api/login/status"):
             assert client.get(path).status_code == 401, f"Private route exposed: {path}"
-        for path in ("/api/crawl", "/api/uppers", "/api/llm/test", "/api/login/qrcode"):
+        for path in ("/api/crawl", "/api/uppers", "/api/llm/test", "/api/login/qrcode", "/api/auth/mfa/setup", "/api/auth/mfa/confirm"):
             assert client.post(path, json={}).status_code == 401, f"Anonymous write exposed: {path}"
         assert client.get("/.env").status_code == 404
         print(json.dumps({"public_pages": "passed", "api_database": "passed", "anonymous_management_denied": "passed", "authors": len(authors), "model_key_ui": "absent", "latest_report": {key: latest[key] for key in ("id", "date", "period")}}))

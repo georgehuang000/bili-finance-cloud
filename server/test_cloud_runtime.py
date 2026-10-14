@@ -206,6 +206,26 @@ class CloudTests(unittest.TestCase):
                 connection.exec_driver_sql("DROP OWNED BY bili_cloud_api, bili_cloud_worker")
                 connection.exec_driver_sql("DROP ROLE bili_cloud_api, bili_cloud_worker")
 
+    def test_shared_network_lockout_cannot_block_binding_or_valid_recovery(self):
+        import owner_auth as auth
+        self.owner()
+        public = TestClient(main.app, base_url="https://testserver")
+        for _ in range(10):
+            self.assertEqual(public.post("/api/auth/login", json={"password": "wrong"}).status_code, 401)
+        self.assertEqual(public.post("/api/auth/login", json={"password": "fixture-password"}).status_code, 429)
+        setup = self.client.post("/api/auth/mfa/setup", json={"password": "fixture-password"}).json()
+        self.activate(setup)
+        with patch.object(cloud, "_password_matches", wraps=cloud._password_matches) as verifier:
+            invalid = public.post("/api/auth/login", json={"password": "fixture-password", "recovery_code": "0" * 32})
+            self.assertEqual(invalid.status_code, 429)
+            verifier.assert_not_called()
+        recovery = setup["recovery_codes"][0]
+        # A wrong password does not consume or discard the recovery proof.
+        self.assertEqual(public.post("/api/auth/login", json={"password": "wrong", "recovery_code": recovery}).status_code, 401)
+        self.assertEqual(public.post("/api/auth/login", json={"password": "fixture-password", "recovery_code": recovery}).status_code, 200)
+        self.assertEqual(public.post("/api/auth/login", json={"password": "fixture-password", "recovery_code": recovery}).status_code, 429)
+        self.assertFalse(self.client.get("/api/auth/session").json()["can_manage"])
+
     def test_cookies_are_encrypted_and_model_configuration_is_environment_only(self):
         cloud.save_settings({"BILI_SESSDATA": "synthetic-cookie-secret"})
         with db.session_scope() as session:
