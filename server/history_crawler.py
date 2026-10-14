@@ -43,25 +43,27 @@ async def crawl(uid, progress, checkpoint, *, page_budget=PAGES_PER_BATCH):
                                 feed_pages=progress.get("feed_pages", 0) + 1)
                 seen_feed.add(next_offset)
             elif not progress.get("videos_done"):
-                page = await bili_api.fetch_archive_page(uid, progress.get("video_oid", ""))
+                page = await bili_api.fetch_archive_page(uid, progress.get("video_oid", ""),
+                                                        page=progress.get("video_pages", 0) + 1,
+                                                        source=progress.get("video_source"))
                 if page["has_more"] and (not page["rows"] or not page["next_oid"] or page["next_oid"] in seen_video):
                     raise ValueError("history_videos_no_progress")
-                if not page["rows"] and page["total"]:
+                if not page["rows"] and page["total"] and not progress.get("video_pages"):
                     raise ValueError("history_videos_empty_payload")
                 videos += db.upsert_videos(page["rows"])
                 collected = progress.get("video_items", 0) + len(page["rows"])
-                if not page["has_more"] and collected < page["total"]:
-                    raise ValueError("history_videos_incomplete")
                 progress.update(videos_done=not page["has_more"],
                                 video_oid=page["next_oid"] if page["has_more"] else "",
                                 video_pages=progress.get("video_pages", 0) + 1,
+                                video_source=page.get("source", "medialist"),
                                 video_items=collected,
+                                video_missing=max(0, page["total"] - collected) if not page["has_more"] else 0,
                                 video_total=page["total"])
                 seen_video.add(page["next_oid"])
             if progress.get("feed_done") and progress.get("videos_done"):
-                progress["status"] = "complete"
+                progress["status"] = "limited" if progress.get("video_missing") else "complete"
             checkpoint()
-            if progress["status"] == "complete":
+            if progress["status"] in ("complete", "limited"):
                 break
             await asyncio.sleep(random.uniform(1.5, 3.0))
     except Exception as error:
@@ -72,4 +74,4 @@ async def crawl(uid, progress, checkpoint, *, page_budget=PAGES_PER_BATCH):
         raise
     return {"ok": True, "count": videos + dynamics, "video_count": videos,
             "dynamic_count": dynamics, "error": None, "login_required": False,
-            "history_pending": progress["status"] != "complete"}
+            "history_pending": progress["status"] == "pending"}

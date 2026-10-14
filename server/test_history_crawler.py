@@ -123,10 +123,21 @@ class HistoryTests(unittest.TestCase):
     def test_premature_video_end_does_not_claim_full_coverage(self):
         self.progress.update(feed_done=True)
         with patch.object(bili_api, "fetch_archive_page", new=AsyncMock(return_value=archive("v1", total=401))):
-            with self.assertRaisesRegex(ValueError, "incomplete"):
-                self.run_history()
-        self.assertEqual(self.progress["status"], "error")
-        self.assertFalse(self.progress.get("videos_done"))
+            result = self.run_history()
+        self.assertEqual(self.progress["status"], "limited")
+        self.assertEqual(self.progress["video_missing"], 400)
+        self.assertFalse(result["history_pending"])
+
+    def test_verified_video_end_with_missing_items_does_not_block_dynamics(self):
+        self.progress.update(video_pages=14, video_items=398, video_oid="last")
+        with patch.object(bili_api, "fetch_archive_page", new=AsyncMock(return_value={
+                "rows": [], "total": 401, "has_more": False, "next_oid": ""})), \
+             patch.object(bili_api, "fetch_space_feed_page", new=AsyncMock(return_value=feed("d-final"))):
+            self.run_history()
+        self.assertEqual(self.dynamic_ids, {"d-final"})
+        self.assertEqual(self.progress["status"], "limited")
+        self.assertEqual(self.progress["video_missing"], 3)
+        self.assertTrue(self.progress["feed_done"])
 
     def test_new_author_or_interrupted_backfill_never_uses_recent_refresh(self):
         for prior, populated in [(None, False), ({"status": "error", "feed_offset": "a"}, True)]:
@@ -151,6 +162,53 @@ class HistoryTests(unittest.TestCase):
             runner._run_pure_api("1000")
         recent.assert_awaited_once_with("1000")
         backfill.assert_not_awaited()
+
+    def test_limited_history_does_not_restart_the_entire_backfill_each_round(self):
+        with patch.dict(runner.STATE, {"uppers": {"1000": {"history": {"status": "limited", "video_missing": 3}}}}), \
+             patch.object(history, "crawl", new=AsyncMock()) as backfill, \
+             patch.object(bili_api, "aclose_client", new=AsyncMock()), \
+             patch.object(bili_api, "crawl_one_uid", new=AsyncMock(return_value={
+                 "ok": True, "videos": [], "dynamics": [], "error": None, "login_required": False})) as recent, \
+             patch("subtitle.enrich_recent_videos_async", new=AsyncMock(side_effect=RuntimeError("offline"))):
+            runner._run_pure_api("1000")
+        recent.assert_awaited_once_with("1000")
+        backfill.assert_not_awaited()
+
+    def test_recent_search_uses_subscribed_name_for_new_author(self):
+        with patch.object(bili_api, "fetch_space_feed", new=AsyncMock(return_value=feed("d1")["items"])), \
+             patch.object(bili_api.db, "subscribed_uppers", return_value=[{"uid": "1000", "name": "new-author-name"}]), \
+             patch.object(bili_api, "fetch_videos_by_search", new=AsyncMock(return_value=[])) as search:
+            asyncio.run(bili_api.crawl_one_uid("1000"))
+        search.assert_awaited_once_with("1000", "new-author-name")
+
+    def test_creator_archive_is_preferred_and_uses_explicit_page(self):
+        payload = {"list": {"vlist": [{"aid": 123, "mid": "1000", "bvid": "BVfixture", "created": 100}]},
+                   "page": {"count": 51}, "is_risk": False}
+        with patch.object(bili_api, "_api_get", new=AsyncMock(return_value=payload)) as request:
+            page = asyncio.run(bili_api.fetch_archive_page("1000", source=None))
+        self.assertEqual(request.call_args.args[0], bili_api.CREATOR_ARCHIVES_URL)
+        self.assertEqual(request.call_args.args[1]["pn"], 1)
+        self.assertEqual(page["source"], "legacy")
+        self.assertTrue(page["has_more"])
+        self.assertEqual(page["rows"][0]["bvid"], "av123")
+
+    def test_blocked_creator_list_can_choose_fallback_only_on_first_page(self):
+        with patch.object(bili_api, "_api_get", new=AsyncMock(side_effect=[
+                bili_api.BiliApiError(-403, "fixture"),
+                {"media_list": [], "has_more": False, "total_count": 0}])) as request:
+            page = asyncio.run(bili_api.fetch_archive_page("1000", source=None))
+        self.assertEqual(page["source"], "medialist")
+        self.assertEqual(request.await_count, 2)
+        with patch.object(bili_api, "_api_get", new=AsyncMock(side_effect=bili_api.BiliApiError(-403, "fixture"))) as request:
+            with self.assertRaises(bili_api.BiliApiError):
+                asyncio.run(bili_api.fetch_archive_page("1000", page=2, source="legacy"))
+        self.assertEqual(request.await_count, 1)
+
+    def test_unknown_archive_source_is_rejected_before_any_request(self):
+        with patch.object(bili_api, "_api_get", new=AsyncMock()) as request:
+            with self.assertRaisesRegex(ValueError, "unknown_source"):
+                asyncio.run(bili_api.fetch_archive_page("1000", source="https://untrusted.example"))
+        request.assert_not_awaited()
 
     def test_local_request_during_active_crawl_cannot_reset_its_checkpoint(self):
         import main

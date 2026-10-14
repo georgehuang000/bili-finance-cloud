@@ -99,11 +99,13 @@ def get_uppers(request: Request):
             row["last_error"] = value.get("last_error") if request.state.owner else None
             row["history_status"] = value.get("history", {}).get("status")
             row["history_video_total"] = value.get("history", {}).get("video_total")
+            row["history_video_missing"] = value.get("history", {}).get("video_missing", 0)
         return rows
     for r in rows:
         r["last_crawl_ts"] = crawler_runner.last_crawl_ts(r["uid"])
         r["last_error"] = crawler_runner.last_error(r["uid"])
         r["history_status"] = crawler_runner.STATE["uppers"].get(r["uid"], {}).get("history", {}).get("status")
+        r["history_video_missing"] = crawler_runner.STATE["uppers"].get(r["uid"], {}).get("history", {}).get("video_missing", 0)
     return rows
 
 

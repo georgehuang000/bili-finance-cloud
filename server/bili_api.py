@@ -405,10 +405,47 @@ async def fetch_space_feed(uid: str, pages: int = 2) -> List[dict]:
 
 
 ARCHIVES_URL = "https://api.bilibili.com/x/v2/medialist/resource/list"
+CREATOR_ARCHIVES_URL = "https://api.bilibili.com/x/space/arc/search"
 
 
-async def fetch_archive_page(uid: str, oid: str = "") -> dict:
+async def fetch_archive_page(uid: str, oid: str = "", *, page: int = 1, source: Optional[str] = "medialist") -> dict:
     """Official creator playlist; include verified collaborations, never recommendations."""
+    if source not in (None, "legacy", "medialist"):
+        raise ValueError("archive_unknown_source")
+    if source != "medialist":
+        try:
+            data = await _api_get(CREATOR_ARCHIVES_URL, {
+                "mid": str(uid), "pn": page, "ps": 50, "order": "pubdate",
+            })
+            if data.get("is_risk") or "vlist" not in (data.get("list") or {}) or "count" not in (data.get("page") or {}):
+                raise BiliApiError(-403, "Creator list is unavailable")
+            rows = []
+            raw = data["list"]["vlist"] or []
+            for item in raw:
+                aid = str(item.get("aid") or "")
+                if not aid:
+                    raise ValueError("archive_missing_id")
+                if str(item.get("mid", uid)) != str(uid):
+                    await asyncio.sleep(random.uniform(1.5, 3.0))
+                    detail = await _api_get("https://api.bilibili.com/x/web-interface/view", {"aid": aid})
+                    if not any(str(member.get("mid")) == str(uid) for member in [detail.get("owner") or {}, *(detail.get("staff") or [])]):
+                        raise ValueError("archive_author_mismatch")
+                pic = item.get("pic") or ""
+                if pic.startswith("//"):
+                    pic = "https:" + pic
+                elif pic.startswith("http://"):
+                    pic = "https://" + pic[7:]
+                rows.append({"bvid": "av" + aid, "uid": str(uid), "title": item.get("title") or "",
+                             "cover": pic, "desc": item.get("description") or "",
+                             "pub_ts": int(item.get("created") or 0), "play": int(item.get("play") or 0),
+                             "url": "https://www.bilibili.com/video/" + (item.get("bvid") or "av" + aid)})
+            total = int(data["page"]["count"] or 0)
+            return {"rows": rows, "total": total, "has_more": page * 50 < total,
+                    "next_oid": str(raw[-1].get("aid") or "") if raw else "", "source": "legacy"}
+        except BiliApiError:
+            # Choose a fallback only at the beginning, never change source mid-run.
+            if source is not None or page != 1:
+                raise
     data = await _api_get(ARCHIVES_URL, {
         "type": 1, "biz_id": str(uid), "oid": oid, "otype": 2, "ps": 30,
         "direction": "false", "with_current": 0, "mobi_app": "web", "tid": 0,
@@ -438,7 +475,7 @@ async def fetch_archive_page(uid: str, oid: str = "") -> dict:
                      "url": "https://www.bilibili.com/video/" + bvid})
     return {"rows": rows, "has_more": bool(data.get("has_more")),
             "next_oid": str(items[-1].get("id") or "") if items else "",
-            "total": int(data.get("total_count") or 0)}
+            "total": int(data.get("total_count") or 0), "source": "medialist"}
 
 
 def _feed_video_row(item: dict, uid: str) -> Optional[dict]:
@@ -864,7 +901,9 @@ async def crawl_one_uid(uid: str) -> dict:
         # 搜索兜底：补齐投稿未自动转动态的视频（arc/search 已被 w_webid 封锁）
         try:
             await asyncio.sleep(random.uniform(1.5, 3.0))
-            extra = await fetch_videos_by_search(uid, config.up_name(uid))
+            name = next((author["name"] for author in db.subscribed_uppers()
+                         if str(author["uid"]) == str(uid)), config.up_name(uid))
+            extra = await fetch_videos_by_search(uid, name)
             if extra:
                 seen = {r["bvid"] for r in vid_rows}
                 vid_rows.extend(r for r in extra if r["bvid"] not in seen)

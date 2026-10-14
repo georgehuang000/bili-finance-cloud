@@ -571,11 +571,11 @@ def _run_pure_api(uid: str, full_history: bool = False) -> dict:
     try:
         author = STATE["uppers"].setdefault(str(uid), {})
         history = author.get("history")
-        needs_history = (full_history or (history and history.get("status") != "complete")
+        needs_history = (full_history or (history and history.get("status") not in ("complete", "limited"))
                          or (history is None and not bili_api._has_history(str(uid))))
         if needs_history:
             import history_crawler
-            if history is None or history.get("status") == "complete":
+            if history is None or history.get("status") in ("complete", "limited"):
                 author["history"] = {}
             result = loop.run_until_complete(history_crawler.crawl(
                 str(uid), author["history"], _save_state))
